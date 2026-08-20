@@ -1,0 +1,17 @@
+# ThinkPad X1 Tablet 3rd gen (20KJ/20KK, PCI SSID 17aa:2244) -- internal microphone fix.
+#
+# The ALC295's digital microphone on pin 0x12 is not clocked unless COEF 0x07
+# bit 10 (0x0400) is set.  Without it the capture path delivers broadband noise
+# (through the analog mixer) or exact digital zeros (through the DMIC's own ADC).
+# With it, the internal mic records normally.
+#
+# Stock value on this machine is 0x0200; we write 0x0600 = stock | 0x0400.
+#
+#   sudo cp x1-tablet-dmic.fw /lib/firmware/
+#   sudo cp x1-tablet-dmic.conf /etc/modprobe.d/
+[codec]
+0x10ec0295 0x17aa2263 0
+
+[verb]
+0x20 0x500 0x07
+0x20 0x400 0x0600
