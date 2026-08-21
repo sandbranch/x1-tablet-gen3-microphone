@@ -38,15 +38,13 @@ reproducible switch, a large set of eliminations, and a hypothesis.
 Use boost **0**, not the Linux default of 3 — the default applies about +30 dB to this pin
 and clips roughly 40 % of samples into a DC rail.
 
-To confirm you have the working state before recording, read one register:
+⚠️ **There is no register you can read to tell whether the microphone will work.** On a
+boot that came through Windows, `0x20 0x2b` reads `0x181` and the mic works. After an S3
+suspend/resume on that same boot, it reads `0x0` — the stock value — **and the mic still
+works**. The only reliable test is to record something.
 
-    sudo hda-verb /dev/snd/hwC0D0 0x20 SET_COEF_INDEX 0x2b
-    sudo hda-verb /dev/snd/hwC0D0 0x20 GET_PROC_COEF 0x00
-    #   0x181  -> working state (came through Windows)
-    #   0x0    -> dead state (cold boot / power cycle)
-
-`0x20 0x2b` is read-only from the host, so it is a reliable indicator and cannot be
-faked — see below.
+**Suspend/resume does not cost you the microphone.** One Windows warm boot holds for the
+session, across folding the folio shut.
 
 ## How the working state was verified
 
@@ -91,6 +89,17 @@ to break it:
   differs by five lines out of 287, all of them caused by the test's own mixer settings.
 
 So the thing Windows leaves behind is not a value that can be read and replayed.
+
+**The decisive demonstration is an S3 suspend/resume.** Across a 12-second `deep` suspend,
+every vendor register reverts to its stock value — `0x2b` `0x181`→`0x0`, `0x08`
+`0x6a00`→`0x6a8c`, `0x0c` `0x41ef`→`0x1ef`, `0x3a` `0x38`→`0x10`, `0x5c 0x0f` `0x0`→`0x1` —
+**and the microphone keeps working**, confirmed by a second correct third-party song
+identification and a 5.8× music/silence control.
+
+A cold boot shows stock registers and a dead microphone. A post-resume boot shows stock
+registers and a working one. The registers therefore cannot be what distinguishes the two
+states: they are symptoms of it. Whatever Windows leaves behind survives a full codec
+re-initialisation and dies only on power loss.
 
 ## The current hypothesis
 

@@ -502,10 +502,10 @@ correlating registers are read-only status; the codec tree is unchanged; Windows
 alone is insufficient; Linux init alone is insufficient; and Windows polls a status
 register 107 times at boot.
 
-The discriminating experiment is **S3 suspend/resume on the live working state**. If the
-microphone survives, the state lives in codec silicon and the search returns to register
-or verb space. If it dies, it is a volatile power/clock domain, and the fix belongs in
-power-up sequencing rather than register replay.
+The discriminating experiment is **S3 suspend/resume on the live working state** — run
+the same night; see §11.8. The microphone **survived**, while every vendor register
+reverted to stock. So the state survives a full codec re-initialisation and dies only on
+power loss, and no host-readable register tracks it.
 
 ### 11.6 ⚠️ Two method traps caught by controls
 
@@ -530,3 +530,50 @@ Until there is a native fix: boot Windows to the desktop, warm-reboot into Linux
 microphone works for the rest of that Linux session. Use `Internal Mic Boost` **0** — the
 Linux default of 3 applies roughly +30 dB to this pin and clips about 40 % of samples into
 a DC rail, which is itself a measurement trap (§8).
+
+### 11.8 ⭐⭐⭐ The S3 test — the capability survives, the register state does not
+
+Run the same night, on the live working state. The discriminating experiment of §11.5,
+and the result is unambiguous.
+
+A real `deep` suspend, 12 seconds (`PM: suspend entry (deep)` → `PM: suspend exit`):
+
+    register        pre-suspend   post-resume      cold-boot/dead
+    0x20 0x08       0x6a00        0x6a8c           0x6a8c
+    0x20 0x0c       0x41ef        0x1ef            0x1ef
+    0x20 0x2b       0x181         0x0              0x0
+    0x20 0x3a       0x38          0x10             0x10
+    0x5c 0x0f       0x0           0x1              0x1
+
+**Every register reverted to its stock value. The microphone kept working.**
+
+    measurement                        pre-suspend   post-resume
+    rms at boost0-maxcap, music         1099          1390
+    rms, music paused                   —             241     (5.8x ratio)
+    third-party song identification     —             ✅ correct track
+
+The residual 241 with music off is not a noise floor: `mod` 15.3 with frame RMS swinging
+59..893 is room events — fan, movement — not stationary hiss.
+
+**This is the strongest exclusion in the whole record.** A cold boot has stock registers
+and a dead microphone. A post-resume boot has stock registers and a working microphone.
+The registers therefore cannot be what distinguishes the two states — they are symptoms
+of the state, not the state itself. That is a third independent proof, arrived at without
+writing anything: §11.3 forced them to dead values and the mic survived; §11.3 also showed
+`0x2b` is read-only; and now a suspend/resume resets all of them with no effect on
+capture.
+
+⚠️ **Consequence for anyone testing this: there is no register you can read to predict
+whether the microphone will work.** An earlier version of this document proposed `0x2b`
+as an indicator. That was wrong and is retracted here — the only reliable test is to
+record something.
+
+**What it implies about the mechanism.** S3 on this machine drops power to the codec and
+the driver re-initialises it on resume, which is what resets the coefficients. Whatever
+Windows leaves behind therefore survives a full codec re-initialisation, and dies only on
+a real power cycle. That is consistent with a clock or power domain that keeps running
+across suspend but stops when the rail actually drops — and it is *not* consistent with
+any state the host can read back.
+
+**Practically:** one Windows warm boot holds for the whole Linux session, across folding
+the folio shut. Suspend/resume does not cost you the microphone.
