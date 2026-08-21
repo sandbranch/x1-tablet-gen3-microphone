@@ -3,8 +3,53 @@
 Research record for the internal microphone of the ThinkPad X1 Tablet 3rd gen
 (20KJ / 20KK), Realtek ALC295, HDA controller `17aa:2244`. Kernel 7.0, Ubuntu.
 
-The bug is **not solved**. This documents what is established, what is excluded, and
-what is left — including two results that were published here and later retracted.
+The bug is **not solved.** This documents what is established, what is excluded, and what
+is left — including results that were published here and later corrected or retracted.
+The negative results are the point as much as the positive ones: several of them close off
+whole methods, and two of them invalidate measurements that looked clean at the time.
+
+---
+
+## 0. Corrections to the initial release
+
+Five claims in the first version of this document were wrong or wrongly scoped. Each is
+corrected in place below; they are collected here because how they failed is reusable.
+
+**C1 — "Windows clears the analog gate because it reads the mic digitally." Wrong.**
+All Windows register values had been sampled after the vendor driver ran its shutdown
+path. Read *during* an active Windows capture, `COEF 0x08` is `0x6a0c` — bits 2+3 **set**,
+analog path **open**. Windows clears them only on teardown. See §5.
+*Reusable lesson: a warm reboot into another OS reads the codec as the previous driver
+**left** it, not as it **used** it. That is a different measurement, and nothing
+distinguishes the two from inside the dump.*
+
+**C2 — `0x3a` and `0x40` were never settings.** They were in the 14-register Windows
+delta, and they were the two that most stubbornly refused live writes, which made them
+look important. Live, mid-capture, they hold the **Linux** value; the `0x3e`/`0x88f0` we
+chased are written by Windows' *shutdown* path. Target list 14 → 12.
+
+**C3 — "Static COEF state is excluded" was scoped to one register bank out of eight.**
+`alc_read_coef_idx()`/`alc_write_coef_idx()` are macros that hardcode nid `0x20`. The
+Realtek driver addresses vendor coefficients on six nodes, and our codec's own init path
+(`alc225_init` → `alc285_hp_init`) writes nids `0x57` and `0x58`. Probing live, seven
+banks besides `0x20` hold real, distinct, non-zero state (`0x53 0x54 0x56 0x57 0x58 0x5a
+0x5b`). Every "COEF space is exhausted" statement in the initial release means
+*nid-`0x20` space*. See §10.
+
+**C4 — the ADC `0x07` routing story is a real mechanism, but it is not the fault.**
+§2 correctly describes the generic parser dropping ADC `0x07`. It does not follow that
+this is the bug: the working ASUS ALC295 machines have an active pin `0x19` too, so the
+parser drops ADC `0x07` for them in exactly the same way — and their internal mic works,
+through mixer `0x23` into ADC `0x08`. The codec decimates the PDM and presents it to the
+analog mixer. **The stock ADC-`0x08` path is the one that matches a proven-working
+configuration**; the pin-`0x19`-disabled/ADC-`0x07` oracle tests a path no working machine
+uses.
+
+**C5 — "a 76 MB ETW trace showed zero HDA verb traffic": right observation, wrong
+conclusion.** That was a generic image-load/CPU trace, and Microsoft's HDAudio provider is
+inert on this machine anyway because `IntcAudioBus.sys` owns the link, not `HDAudBus.sys`.
+`RTKVHD64.sys` ships **its own** manifest-based ETW provider that logs every codec verb.
+See §10.
 
 ---
 
@@ -27,6 +72,20 @@ Intel HDMI one. The vendor ID is returned by the chip and cannot be spoofed in s
 `17aa:2244`**; hda patch-firmware `[codec]` lines match the **codec SSID `0x17aa2263`**.
 Using the wrong one silently does nothing.
 
+### The pin table
+
+    0x12  0x90a60130  Fixed  Mic In    OTHER DIGITAL   <- the ONLY internal mic
+    0x14  0x90170110  Fixed  Speaker   analog
+    0x19  0x04a11040  Jack   Mic In    1/8"            <- headset mic, works
+    0x1a  0x411111f0  None   (disabled)
+    0x1b  0x90170150  Fixed  Speaker   analog
+    0x21  0x04211020  Jack   HP Out    1/8"
+
+There is **no analog internal mic pin** on this machine. Note the family also uses
+`0x90a70130` (connection type 7 = Other *Analog*) on pins `0x1a`/`0x1b` for analog
+internal mics — "internal mic" means two different things across this family, and ours is
+the digital kind.
+
 ## 2. Topology, and what the generic parser does with it
 
 The ALC295 has three input converters:
@@ -35,30 +94,35 @@ The ALC295 has three input converters:
     ADC 0x08  <- Audio Mixer    0x23  <- 0x19 0x1a 0x1b 0x1d 0x12
     ADC 0x09  <- Audio Mixer    0x22  <- 0x19 0x1a 0x1b 0x1d 0x13   (fully muted)
 
-Selector `0x24` already selects `0x12`, and ADC `0x07` supports a single fixed rate —
-the signature of a PDM decimation path. So `0x12 -> 0x24 -> 0x07` is the dedicated
+Selector `0x24` already selects `0x12`, and ADC `0x07` supports a single fixed rate — the
+signature of a PDM decimation path. So `0x12 -> 0x24 -> 0x07` is the dedicated
 digital-microphone path.
 
 Linux exposes exactly one capture PCM, on ADC `0x08`. The reason is in
 `sound/hda/codecs/generic.c` — the parser filters out ADCs that cannot reach every active
-input pin, and ADC `0x07` cannot reach pin `0x19`, the headset mic. So it keeps `0x08`
-and drops `0x07`, and the digital pin gets read through the **analog** mixer.
+input pin, and ADC `0x07` cannot reach pin `0x19`, the headset mic. So it keeps `0x08` and
+drops `0x07`, and the digital pin gets read through the **analog** mixer.
 
 This can be overridden with a pin-config patch that disables `0x19`, after which the
 parser selects ADC `0x07` (confirmed: during capture `0x07 conv=0x10`, `0x08`/`0x09`
-idle). It does not help — see §4 — but it is a useful oracle.
+idle).
+
+⚠️ **See correction C4.** This is a real mechanism but not the fault — working machines
+drop ADC `0x07` in exactly the same way and read the DMIC through mixer `0x23`. On this
+machine, forcing ADC `0x07` yields exact zeros, and so does the stock mixer path.
 
 ## 3. ⭐ The noise is a floating analog input — `COEF 0x08` bits 2+3
 
-**This is the main result.**
+**This is the main result, and it survives every later correction.**
 
-    COEF 0x08 = 0x6a8c   (Linux)    -> broadband noise, rms ~153, sustained
-    COEF 0x08 = 0x6a00   (Windows)  -> EXACT digital silence
+    COEF 0x08 = 0x6a8c   (Linux)   -> broadband noise, rms ~153, sustained
+    COEF 0x08 = 0x6a00             -> EXACT digital silence
 
 Measured on the normal capture path (ADC `0x08`, stock pin config). A 12-second capture
-in the Windows configuration contained **2 304 000 data bytes, not one of them non-zero**.
+with the bits cleared contained **2 304 000 data bytes, not one of them non-zero**.
 
-Bit map, two rounds, 3-second captures with 500 ms of head discarded, both rounds agreeing:
+Bit map, two rounds, 3-second captures with 500 ms of head discarded, both rounds
+agreeing:
 
     0x6a0c  (bits 2+3)      -> noise, sustained
     0x6a8c  (Linux)         -> noise, sustained
@@ -66,32 +130,38 @@ Bit map, two rounds, 3-second captures with 500 ms of head discarded, both round
 
 **Bits 2 and 3 must both be set for the analog input to pass.** Bit 7 is irrelevant to it.
 
-### The control that makes this safe to believe
+### Two independent controls
 
-With the bits cleared (silence), enabling the codec's internal DAC→ADC loopback and
-playing a 1 kHz tone gives **rms 32621, peak 32768, dominant peak 1000.0 Hz**.
+**Electrical.** With the bits cleared (silence), enabling the codec's internal DAC→ADC
+loopback and playing a 1 kHz tone gives rms 32621, peak 32768, dominant peak 1000.0 Hz.
+⇒ the ADC, its DMA and the whole capture chain are **alive** with the bits cleared. Those
+bits gate the analog *source*, not the converter.
 
-⇒ The ADC, its DMA and the whole capture chain are **alive** with the bits cleared. Those
-bits gate the analog *source*, not the converter. The silence is a real disconnect.
+**Acoustic.** A later two-point calibration with a headset in the analog mic jack:
+at `0x6a8c` the capture contains **real speech** (burst/pause envelope, voiceband
+300–3400 Hz tracking it at corr 0.88, pitch peaks at 155 Hz and 227 Hz, mains 50/100 Hz
+10–13 dB *down*); at `0x6a00`, **exact silence**, rms 0.7, and speaking during the capture
+changed nothing.
+
+The acoustic control is the stronger one, and it was added specifically because the
+electrical one has a blind spot: a loopback proves the converter and DMA work, but it does
+**not** prove that a live external source would appear where we are looking. It now does
+— for the shared path downstream of mixer `0x23`. It still does not prove that the DMIC's
+digital leg *into* the mixer would appear.
 
 ### Why it matters
 
-The "flat white noise" that defines this bug is an unconnected analog input being
-sampled. It is not an undecimated PDM bitstream, not a badly-clocked microphone, and not
-mic data of any kind. Any spectral argument about it — including the rise toward Nyquist,
-which looks exactly like sigma-delta noise shaping — is analysing nothing.
+The "flat white noise" that defines this bug is an unconnected analog input being sampled.
+It is not an undecimated PDM bitstream, not a badly-clocked microphone, and not mic data of
+any kind. Any spectral argument about it — including the rise toward Nyquist, which looks
+exactly like sigma-delta noise shaping — is analysing nothing.
 
-Windows disables the analog path because it reads this microphone digitally.
+⚠️ **See correction C1** for what this does *not* say about Windows.
 
 ## 4. ⭐ Method: init-time COEF writes reach state that live writes cannot
 
-The finding in §3 was only reachable because the Windows register values were applied
-**at codec init**, via hda patch firmware, instead of being written live to a running
-codec.
-
-Of the 14 registers that differ between Linux and Windows, 12 took at init — including
-`0x3a` and `0x40`, which had come back **`STUCK`** (write ignored) on live writes. Two
-registers, `0x2b` and `0x67`, never take by either route.
+The finding in §3 was only reachable because the Windows register values were applied **at
+codec init**, via hda patch firmware, instead of being written live to a running codec.
 
     [codec]
     0x10ec0295 0x17aa2263 0
@@ -102,98 +172,200 @@ registers, `0x2b` and `0x67`, never take by either route.
 
 Loaded with `modprobe snd_hda_intel patch=<file>.fw`.
 
-Anyone replaying vendor register state on an HDA codec should do it this way. A live
-write test can return a false negative purely because the register is latched after init.
+Anyone replaying vendor register state on an HDA codec should do it this way: a live write
+test can return a false negative purely because the register is latched after init.
 
-## 5. What Windows does — the whole stack, taken apart
+⚠️ Two caveats the initial release did not have. First, **see correction C2** — the
+headline example of "took at init but was STUCK live" (`0x3a`, `0x40`) turned out not to
+be configuration at all. Second, and worse, the harness assumption underneath it is false;
+see §8, "A driver reload does not reset the codec".
+
+Two registers, **`0x2b` and `0x67`, never take by any route** — live or at init, alone or
+in combination. They read back `0x0` every time. They are not negative results; they are
+untested, and whatever holds them off is not the live-write gate, because init-time writes
+bypass it.
+
+## 5. ⭐⭐ Reading the codec while Windows is recording
+
+§10 of the initial release said the remaining unknown was "state the vendor driver holds
+only while a capture stream is open, which no post-hoc dump can see". That measurement has
+now been made, by bugchecking Windows in the middle of an active capture and booting Linux
+with `snd_hda_intel.probe_only=3` so the codec driver never touches the codec.
+
+**Only four registers move on Windows' teardown path:**
+
+| COEF | Windows live (crashed mid-capture) | Windows after clean shutdown | Linux |
+|------|------------------------------------|------------------------------|-------|
+| 0x08 | **0x6a0c** | 0x6a00 | 0x6a8c |
+| 0x3a | 0x10       | 0x3e   | **0x10** |
+| 0x40 | 0x8800     | 0x88f0 | **0x8800** |
+| 0x67 | **0x1200** | 0x1000 | 0x0 |
+
+So the post-teardown oracle was ~85% right — 10 of 14 registers read the same live as
+after teardown — but it was wrong about the one register the whole analysis rested on.
+
+The live Linux-vs-Windows delta is these 12 registers:
+
+    0x08=0x6a0c 0x0c=0x41ef 0x24=0x002d 0x26=0x0065 0x28=0x2200 0x29=0xa015
+    0x2b=0x0181 0x44=0x4500 0x48=0xd811 0x49=0x0045 0x62=0x0077 0x67=0x1200
+
+### 🚫 And the codec *tree* can never be read this way
+
+`codec-after-linux`, `codec-after-windows` and `codec-after-crash` dumps are
+**byte-identical** — same md5. Every converter reads `stream=0, channel=0` even though
+Windows was actively streaming at the instant of the bugcheck.
+
+The HDA **link reset** that `snd_hda_intel` performs at probe wipes widget state
+(converters, pin controls, amps, GPIO) while leaving the vendor COEF bank intact — which
+is exactly why the COEFs *did* differ and the tree did not. So "which ADC does Windows
+use", "what does mixer `0x23` hold live", "which pins are powered" are **structurally
+unanswerable** by any reboot-based oracle, no matter how the reboot is triggered. Do not
+spend another crash on them.
+
+## 6. Replaying the corrected values — negative
+
+The 12 live values were applied at init, on the **stock ADC-`0x08`/mixer-`0x23` path**
+(per C4, the configuration working machines actually use), against a baseline verified
+exact-silent and a codec verified stock by cold boot:
+
+* **the 11 non-`0x08` values, one per driver load** — 9 took at init; every one captured
+  **exact zero**. (`0x2b`, `0x67` refused, as always.)
+* **`0x08=0x6a0c` alone** — the entire live delta in the one register with acoustic ground
+  truth. Produces sustained non-zero output that passes naive artefact filters, but a
+  classifier validated against labelled recordings judges it **not audio**: stationary
+  noise, modulation 1.04, dynamic range 1.3×, no speech envelope, energy rising to 33% in
+  the 10–20 kHz band. It is the §3 floating input, nothing more.
+* **all 12 applied together** — spectrally *identical* to `0x08` alone (rms 571 vs 591,
+  same rising-HF shape, same verdict). The other eleven registers contribute nothing.
+
+⇒ The complete Windows live vendor-COEF state, replayed faithfully at init on the path a
+working machine uses, does not turn the microphone on. **Static nid-`0x20` state is
+excluded on both oracles.** (Scope: nid `0x20` only — see C3.)
+
+## 7. What Windows does — the whole stack, taken apart
 
 Windows records this microphone correctly, so it is a working reference implementation.
-Every layer of it was examined for a per-machine configuration, and **there is none**:
+Every layer was examined for a per-machine configuration, and **there is none**:
 
 | source | result |
 |---|---|
 | `RTKVHD64.sys` pin-config tables | all gated on Realtek **reference-board** SSIDs (`10EC10AE`, `10EC108C`, …) via `SET_SUBSYSTEM_ID`. Never matches `17AA2263`. |
 | `RTKVHD64.sys` vendor COEF inits | one sequence, repeated; contains `0x2d=0x3020`, which **bricks this codec**. Not for the ALC295. |
+| `RTKVHD64.sys` constants | none of our measured COEF values appear as constants anywhere in the binary ⇒ they are runtime state, not settings |
 | `RTAIODAT.DAT` 2018, 19 MB (installed) | `MDTR` format, 1420 platform records. **No `17aa2244`, no `17aa2263`.** |
 | `RTAIODAT.DAT` 2020, 39 MB | 1794 records. **Same — absent.** |
 | the installed INF | endpoint naming and effects only |
 | the OEM extension INF | matches our SSID **exactly** — and installs audio effects only |
 | `NHLT` ACPI table | **EndpointCount = 0**, payload `deadbeef` — the same empty table Windows reads |
-| a 76 MB ETW audio trace | image-load / CPU trace; **zero HDA verb traffic** |
+| a 76 MB ETW audio trace | image-load / CPU trace; zero HDA verb traffic — but see **C5** |
 
 Windows drives this microphone with **generic runtime behaviour**, not a vendor blob.
-There is no magic init sequence to lift out of the driver.
+There is no magic init sequence to lift out of the driver — which is precisely why a
+*runtime* verb log is the right next instrument, and a static one never was.
 
 Architecturally, Windows runs the codec under **Intel Smart Sound** (`IntcAudioBus`
 running, `HDAudBus` stopped, service `IntcAzAudAddService`, `ForceSST=1`), with
 `RTKVHD64.sys` as the miniport. Its per-platform registry key is keyed by the PCI SSID
 `17aa2244` and holds runtime state (`Pin12=1`, `ChannelConfig=3`, 48 kHz), not
-configuration. The endpoint's default format is 2 ch / 48 000 Hz / 16-bit, mask `0x3`.
-
-## 6. Excluded
-
-* **Hardware.** Three independent X1 Tablet Gen 3 machines show the identical symptom.
-* **BIOS.** Broken on 1.28 (2019) and on 1.51 / N1ZET95W (2024-11-15).
-* **A PCH digital-microphone path.** `NHLT` declares zero endpoints on both operating
-  systems, so there is no DSP-side DMIC — the microphone is on the codec.
-* **The DSP/host controller choice.** Forcing Linux onto the Intel AVS DSP
-  (`snd-intel-dspcfg dsp_driver=4`) binds `snd_soc_avs`, but capture is spectrum-identical
-  and shows zero response to speech: it swaps the host DMA side while the same codec
-  driver and parser make the same routing decision.
-* **Converter selection.** Forcing the parser onto ADC `0x07` works and yields exact
-  zeros. Four stream formats (1/2 ch, 16/24-bit, 48 kHz and even an unadvertised 44.1 kHz)
-  all program correctly and all yield zeros.
-* **Codec GPIOs.** All disabled, byte-identical on both operating systems.
-* **Platform ACPI.** The DSDT (39 450 lines decompiled) contains no microphone device,
-  rail or GPIO; the only audio device is `HDAS` with the stock Intel `_DSM`.
-* **Static COEF replay.** All 14 measured Windows values, individually and together,
-  live and at init — no audio. `alc256_fixup_set_coef_defaults` (`0x10 0x24 0x26 0x29
-  0x37 0x45`), whose kernel comment describes this exact symptom, is also negative; on
-  this machine Windows holds the *same* values as Linux for `0x10` and `0x45`.
-
-## 7. Two retracted results, and why they survived review
-
-Kept deliberately — both are instructive.
-
-**`COEF 0x07` bit 10 "DMIC clock enable".** It is an internal DAC→ADC loopback. Tone tests
-recovered 1 kHz at over a million times the median bin and tracked frequency across two
-test tones — and all of it was the machine recording its own playback. See
-`retracted/RETRACTED.md`. An earlier candidate had already failed the same way through
-speaker bleed. **Two independent traps, each producing a clean frequency match.**
-
-**"The DMIC clock theory is dead."** That was concluded from COEF dumps taken after a
-warm reboot from Windows — i.e. *after* the Windows driver ran its shutdown path. Any
-register the vendor driver clears on the way out reads identical to never-set. The
-measurement could not have detected a stream-scoped enable, so it never established what
-it was cited for.
+configuration.
 
 ## 8. Traps worth knowing on this codec
 
+Every one of these produced a wrong result here before it was understood.
+
+* 🚨 **A driver reload does NOT reset vendor COEFs. Only a power cycle does.**
+  `modprobe -r snd_hda_intel; modprobe snd_hda_intel` restores only the registers the
+  driver itself writes; everything else keeps whatever the last test left. Some registers
+  **latch** — they accept a new value and then refuse to go back, across reloads, six
+  consecutive loads of a firmware setting `0x3a=0x0010` all read back `0x3e`.
+  ⇒ Any multi-phase sweep that "reloads between phases to restore the baseline" has been
+  running against a silently drifting reference. A `TOOK` verdict can be a *persisted
+  earlier write*; a `STUCK` verdict is only valid relative to whatever the register
+  happened to hold at that moment. **Snapshot before, verify restore after, and
+  power-cycle for a true baseline.**
+* ⚠️ **Ten registers out of 1024 move on their own.** Established by diffing Linux-only
+  dumps against each other, no Windows involved: `0x20 0x35` bit 15 and `0x53 0x01` track
+  headphone-jack presence and revert exactly; `0x20 0x46` bit 9 and seven `0x58`
+  registers (the headphone-amp calibration bank written by `alc285_hp_init`) latch on jack
+  insertion and **do not revert on removal**. They are stable across repeated reads, so
+  they are not jittering telemetry you would notice — they are event-latched analog
+  measurements, indistinguishable from deliberate configuration in a static diff.
+  **Check any cross-OS delta against a same-OS control before calling it evidence.**
+* 🚨 **Two registers brick the codec.** `COEF 0x2d = 0x3020` and clearing `COEF 0x33`
+  bit 15 both stop it answering; no module reload recovers either, only a full power
+  cycle. Never replay a vendor COEF sequence wholesale — write one register at a time and
+  verify the codec still answers after each.
 * **Mute every output pin before believing any microphone result.** Frequency tracking
-  does not distinguish an electrical loopback from an acoustic path.
-* **Capture-start transient.** A fresh capture shows rms ≈ 2900, peak 32767 for the first
-  few hundred milliseconds regardless of state. It produced a false hit here. Use ≥2 s
-  captures, discard ≥500 ms, and require *sustained* frame RMS.
-* **"Not zero" is not a signal.** Four apparent hits in a bit sweep were all converter
-  artefacts: a stuck DC alternating at Nyquist, a full-scale stuck value, and decaying
+  does not distinguish an electrical loopback from an acoustic path. This cost two
+  retracted results (§9).
+* **The first capture after a driver reload is a full-scale DC rail.** On the stock path,
+  the first stream open after `modprobe` pins the input at +32767 for ~1.1 s, then decays
+  exponentially to exactly zero — 0.0% energy in every band from 50 Hz to 20 kHz, DC
+  offset ~+10950. It is the analog front end powering up, not a signal, and it fooled an
+  artefact filter into rejecting a whole test run. It is triggered by the **first stream
+  open after a reload**, and the decay starts *at open*, so waiting does not help: open
+  the stream once, throw the result away, and measure on the second open.
+* **"Not zero" is not a signal.** Apparent hits in a bit sweep were all converter
+  artefacts: a stuck DC alternating at Nyquist, a full-scale stuck value, decaying
   transients. Require: sustained across the window, channels not bit-identical, not a
   fixed alternation at Nyquist, many distinct values.
-* **`COEF 0x2d = 0x3020` bricks the codec.** It stops answering; no module reload
-  recovers it, only a full power cycle. Never replay a vendor COEF sequence wholesale —
-  write one register at a time and verify the codec still answers after each.
+* **Validate your verdict function against labelled ground truth.** The classifier used
+  for most of this work scored **5 of 8** on a labelled reference set — it called a
+  deliberate room-tone control "speech", and missed real speech because a low male
+  fundamental puts most energy below 300 Hz and an uncorrected DC offset put 0 Hz at the
+  top of the spectrum. Corrected to 8/8, the entire archived corpus was re-judged; no
+  negative became a hit, but that was luck, not method.
 * **Live values differ from `probe_only=3` dumps.** `COEF 0x10` reads `0x0120` live and
   `0x0320` with the driver's init suppressed. Do not plan bit tests off a probe-only dump.
 * `modprobe -r snd_hda_intel` fails while PipeWire holds the card; it must be **masked**,
   not merely stopped, because socket activation restarts it instantly.
 
-## 9. What is left
+## 9. Retracted results, and why they survived review
 
-The enable for the digital microphone itself. With the analog path disabled — Windows'
-own configuration — the capture chain is proven alive and delivers exact zeros, so
-nothing is arriving from the PDM source. The static configuration space is exhausted:
-Windows holds no per-platform blob, and its post-shutdown register state has been
-replayed in full.
+Kept deliberately — both are instructive, and both are shipped in `retracted/`.
 
-That leaves state the vendor driver holds only **while a capture stream is open**, which
-no post-hoc dump can see. Capturing it requires reading the codec while Windows is
-actively recording.
+**`COEF 0x07` bit 10 "DMIC clock enable".** It is an internal DAC→ADC loopback. Tone tests
+recovered 1 kHz at over a million times the median bin and tracked frequency across two
+test tones — and all of it was the machine recording its own playback. An earlier
+candidate had already failed the same way through speaker bleed. **Two independent traps,
+each producing a clean frequency match.**
+
+**"The DMIC clock theory is dead."** Concluded from COEF dumps taken after a warm reboot
+from Windows — i.e. after the vendor driver ran its shutdown path. Any register the driver
+clears on the way out reads identical to never-set. The measurement could not have
+detected a stream-scoped enable, so it never established what it was cited for. §5 is the
+experiment that finally could, and correction C1 is the claim it overturned.
+
+## 10. What is left
+
+**Scope first.** "The static configuration space is exhausted" is now three separate,
+narrower statements: nid-`0x20` COEF state is excluded on both capture paths (§6); seven
+other vendor register banks have never been swept (C3); and no static Windows artefact
+holds per-platform configuration (§7).
+
+Linux's own init is almost a no-op in this space — across 8 banks × 128 registers, its
+entire delta from the uninitialised power-on state is **two registers** (`0x20 0x10` and
+`0x20 0x36`). The seven unexplored banks are byte-identical initialised vs uninitialised,
+which makes them an unusually clean diff surface.
+
+**The next instrument is a runtime verb log, not another dump.** `RTKVHD64.sys` registers
+a manifest-based ETW provider at `DriverEntry` — unconditionally, so no registry knob is
+needed:
+
+    {3c9fef08-fa30-4c6f-b9b6-b8329e816d5b}
+
+Its `etwVerb`/`opSendVerb` event carries `VerbCommand`, `VerbCount`, `Command`,
+`Response`, `Index`, `Data` and `pin` — `Index`+`Data` being the COEF index/data pair, and
+`Command`+`Response` meaning **reads are captured too**. `etwStreamOperation` carries
+capture start/stop with `SampleRate`, `Channels`, `ChannelMask` and `FormatTag`.
+
+That yields the **timestamped sequence of verbs Windows sends, correlated to capture
+start**, from a normal running system — no bugcheck, no test-signing, no driver injection.
+It answers the one question no static diff ever could: not *what values* Windows holds,
+which we now have in full and which do nothing, but *in what order and at what moment* it
+writes them. Given §7 — that Windows drives this microphone with generic runtime
+behaviour rather than a blob — a sequence, a timing dependency, or a verb that is not a
+COEF write at all is the remaining shape the answer can take.
+
+Still open behind that: why `0x2b` and `0x67` refuse writes by any route, and the seven
+unswept vendor banks.
