@@ -577,3 +577,69 @@ any state the host can read back.
 
 **Practically:** one Windows warm boot holds for the whole Linux session, across folding
 the folio shut. Suspend/resume does not cost you the microphone.
+
+### 11.9 ⭐⭐⭐ The state survives every reset software can issue
+
+§11.8 showed the microphone surviving an S3 suspend. The obvious follow-up is how far down
+that goes. It goes all the way.
+
+Each step below was verified by **third-party acoustic fingerprint identification** of
+whatever was playing in the room, not by signal level — four different tracks across the
+evening, every identification correct.
+
+    action                                    registers after   microphone
+    13 candidate registers forced to DEAD     as written        works
+    0x40 left permanently at dead 0x8800      dead              works
+    S3 suspend/resume (deep, 12 s)            reset to default  works
+    codec AFG D3 -> D0                        reset to default  works
+    FUNCTION_RESET (nid 0x01, verb 0x7ff)     reset to default  works
+    PCI remove + rescan, full driver re-probe reset to default  works
+    removing machine power                    reset             DEAD
+
+Every one of those resets the vendor coefficients — `0x20 0x08` `0x6a00`→`0x6a8c`, `0x2b`
+`0x181`→`0x0`, `0x5c 0x0f` `0x0`→`0x1`. The microphone is indifferent to all of it.
+
+**The codec's own power-down state (D3) does not clear it. Its hardest software reset
+(`FUNCTION_RESET`) does not clear it. Tearing the PCI device out and re-probing the driver
+from zero does not clear it.** Only removing power from the machine does.
+
+### 11.10 Zero registers separate working from dead
+
+The complete comparison, made possible by having a working codec whose registers had been
+reset: a full 160-register × 15-node dump of the **working** post-S3 codec against the two
+**dead** cold-boot dumps — 2400 registers.
+
+    WORKING (post-S3)  vs  DEAD (post-powercycle)   15 differ  (5 non-volatile)
+    WORKING (post-S3)  vs  DEAD (cold boot)         10 differ  (3 non-volatile)
+    WORKING (post-S3)  vs  WORKING (pre-suspend)    28 differ  (21 non-volatile)
+
+**The two working states differ from each other more than either differs from a dead
+codec.** Exactly one register differed from both dead dumps — `0x5a 0x01`, `0xf` vs
+`0x10f` — and it survived about a minute: it reads `0x10f` in the two *earlier* working
+dumps as well, making it a post-S3 artefact rather than a marker.
+
+*Method note: that candidate was briefly treated as a lead before all four dumps were
+checked. With three-plus samples per state available, check every one before calling a
+single-register difference a finding.*
+
+### 11.11 What is actually left
+
+The enabling state is not codec register state, not the codec tree, and not reachable by
+any reset software can issue. It survives the codec's own power-down and a complete driver
+re-probe, and clears only on a true power-on reset. That is the signature of **a clock or
+power rail that Windows starts and that nothing short of power loss stops.**
+
+Two candidate surfaces were closed the same night:
+
+- **The SoC's own digital-microphone pins are unused.** Pads 89–92 (`DMIC_CLK_0/1`,
+  `DMIC_DATA_0/1`) sit in GPIO mode with **both buffers disabled** (`0x300` = RXDIS+RXDIS)
+  *while the microphone is working*.
+- **The `NHLT` ACPI table is 45 bytes** — essentially empty, describing no DMIC endpoints.
+
+So the PDM microphone is on the codec, not on the SoC, and the Intel SST/AVS path was never
+the answer — consistent with that fix having tested negative earlier.
+
+**The one untested surface** is the rest of the platform: pad configuration registers for
+all 152 pins, GPIO line state, PCI configuration space, clock tree, ACPI device power
+states. A complete capture was taken while the microphone was working; the comparison
+requires the same capture on a dead boot, which needs a power cycle to produce.

@@ -88,6 +88,17 @@ to break it:
 - **The codec tree is identical.** A live working codec versus a cold-boot dead one
   differs by five lines out of 287, all of them caused by the test's own mixer settings.
 
+**Nor is it reachable by any reset software can issue.** The microphone keeps working
+through an S3 suspend, through the codec's own **D3** power-down, through a
+**`FUNCTION_RESET`**, and through tearing the PCI device out and re-probing the driver from
+zero — each of which resets the vendor coefficients to their defaults. Only removing power
+from the machine kills it.
+
+And the complete comparison finds nothing: a full 160-register × 15-node dump of a
+**working** codec against two **dead** ones — 2400 registers — leaves no register that
+separates them. The two *working* states in hand differ from each other more than either
+differs from a dead codec.
+
 So the thing Windows leaves behind is not a value that can be read and replayed.
 
 **The decisive demonstration is an S3 suspend/resume.** Across a 12-second `deep` suspend,
