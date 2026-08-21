@@ -643,3 +643,135 @@ the answer — consistent with that fix having tested negative earlier.
 all 152 pins, GPIO line state, PCI configuration space, clock tree, ACPI device power
 states. A complete capture was taken while the microphone was working; the comparison
 requires the same capture on a dead boot, which needs a power cycle to produce.
+
+## 12. ⭐⭐⭐ 2026-08-21, later — the cold boot, and the end of the readable surfaces
+
+§11.11 closed by naming one untested surface and the experiment that would settle it: the
+same platform-wide capture, taken on a dead boot. That experiment has now been run.
+
+### 12.1 The cold boot is dead, and the boundary is exactly power
+
+The machine was powered off — a real `systemd-poweroff`, confirmed in the journal, not a
+reboot — and powered back on into Linux. The platform capture was taken **first**, at one
+minute of uptime, before anything else touched the machine. Then the acoustic oracle of
+§11.2 was run against music playing in the room.
+
+    capture                        rms      p99.9     third-party ID
+    working (post FUNCTION_RESET)  3177     32768     correct
+    working (post codec D3)        2856     32767     correct
+    working (first music capture)  1606      6033     correct
+    cold boot, music playing       25.4       252     NO MATCH
+
+The measured dead floor is 20–70. The result is not a weak signal, it is no signal: the
+normaliser's 60× gain ceiling was reached and the loudest 0.1 % of samples still sat at
+252 counts. The prediction held.
+
+Combined with the earlier tests, the boundary is now drawn precisely:
+
+    cold boot, Linux only                          dead
+    warm boot from Windows                         works
+    warm reboot Linux -> Linux from a working state works
+    S3 suspend/resume                              works
+    codec D3 power-down                            works
+    codec FUNCTION_RESET                           works
+    full PCI remove + rescan                       works
+
+**Nothing software can do removes the state. Removing power always does.** For a user,
+that reduces to a workaround worth stating plainly: **one Windows boot per power cycle,
+not per reboot.** Reboots, suspends and driver reloads are all free once the state exists.
+
+### 12.2 The platform capture explains nothing
+
+`platform-state-warm-working` versus `platform-state-cold-dead`, sixteen files.
+
+**Byte-identical:** all 152 pinctrl pads (`pins`, `pinconf`, `pinmux`, `gpio-ranges`), the
+HDA controller's PCI configuration space at both 256- and 4096-byte depth, the iGPU
+extended configuration space, the ACPI table list, every ACPI device's `_STA`, and the
+controller's runtime power status.
+
+**Different, and all of it accounted for:**
+
+- `clk_summary` and `gpio-all` — `tps68470-clk` at 24 MHz bound to `i2c-INT3477:00 xvclk`
+  versus 19.2 MHz unbound, and the `s_enable` / `s_resetn` GPIO lines claimed versus
+  unclaimed. That is the **camera** PMIC on this tablet's other unsupported device; the
+  working boot had had the camera lane exercised. Nothing to do with audio.
+- `lspci` — twenty lines of IRQ numbers, MSI addresses, `LaneErrStat` and PCIe
+  de-emphasis level. Boot-to-boot allocation and link-training variation.
+- `codec-tree` — three lines, all of them **our own mixer settings**: node `0x12` Amp-In
+  `0x03` (the driver's default microphone boost) against the `0x00` this work sets, and
+  nodes `0x14` and `0x1b` Amp-Out `0x80`, the output mutes applied per §9. Routing,
+  connection lists and pin configuration are identical.
+- `power.txt` — `runtime_suspended_time`, a counter.
+
+No pad, no PCI register, no ACPI object, no clock and no codec node separates working from
+dead. Taken with §11.3 — 2400 codec registers, zero of which separate the states — and the
+byte-identical codec tree, **every surface this work could read has now come back empty.**
+
+A calibration point on how little that leaves: two *working* captures differ from each
+other by five pinctrl RX-level bits on unrelated pads. Working and dead differ by less
+than working and working.
+
+### 12.3 The last unread surface: the controller's MMIO block
+
+One gap remained, and it is worth naming precisely because it had been quietly assumed
+away: `lspci -xxxx` dumps PCI **configuration** space. It does not touch the controller's
+**memory-mapped** register block, which is where the HD-audio controller actually lives.
+That had never been read.
+
+It has now been read on the dead side. Method, since the traps are the useful part:
+
+- Map `/sys/bus/pci/devices/0000:00:1f.3/resource0`. Do **not** use `/dev/mem` on this
+  platform; it hard-hangs the machine.
+- The controller **runtime-suspends when idle**, and MMIO reads against a device in D3
+  return all-ones. Force `power/control=on`, wait for `active`, dump, restore. A dump
+  taken without this is sixteen kilobytes of `0xff` that looks like data.
+- Take **two back-to-back passes**. Whatever differs between them is free-running and must
+  be masked before any working-versus-dead comparison. Here that is seven offsets: the
+  wall clock at `0x0030`, the CORB and RIRB ring pointers at `0x0048` and `0x0058`, the two
+  per-link frame counters, and two aliases at `0x2030` and `0x3030`.
+- BAR4, 64 KiB, is the Intel cAVS **DSP aperture**. It was deliberately left untouched:
+  reading it while the DSP power domain is gated can hang the machine, and the Processing
+  Pipe capability header shows the pipe idle, so the domain is probably gated.
+
+The block is not empty. It carries a five-entry Intel extended-capability chain:
+
+    @0x0c00  ID 2  Multi-Link                  -> @0x0800  ID 3  Processing Pipe (DSP)
+    -> @0x0500  ID 1  Global Time Sync         -> @0x1f00  ID 5  DMA Resume
+    -> @0x0700  ID 4  Software Position Based FIFO -> end
+
+Offsets and bit fields verified against `include/sound/hda_register.h` in the running
+kernel's own source, not from memory: `AZX_ML_BASE` 0x40, `AZX_ML_INTERVAL` 0x40,
+`SCF` = bits 3:0, `SPA` = bit 16, `CPA` = bit 23.
+
+The **Multi-Link** block is the interesting one. Link 0 is the external HD-audio link that
+carries the ALC295; link 1 is display audio.
+
+    reg                  link 0 (DEAD)                       link 1
+    LCAP   +0x00         0x00000007  (legacy HDA, not ALT)   0x0000001f
+    LCTL   +0x04         0x00810002  SCF=2 SPA=1 CPA=1       0x00810004  SCF=4
+    LOSIDV +0x08         0x0000fffe                          0x0000fffe
+    LSDIID +0x0c         0x00000003                          0x00000004
+    LPSOO/LPSIO +0x10    0x00020000                          0x00020002
+    LOUTPAY +0x20        0x001c000d                          0x000b0003
+    LINPAY  +0x30        0x000d0005                          0x00000000
+
+`LCTL.SCF` is the link clock-frequency select; `SPA` and `CPA` are the link's requested and
+actual power state. This is the first candidate in the entire investigation that fits the
+shape of the answer rather than contradicting it. It is **in the PCH, not in the codec**,
+which is what a state surviving codec resets and dying on power removal requires. And
+unlike every vendor COEF this work chased for two days, **these registers are writable.**
+
+That is a hypothesis with an address, not a result. The dead-side dump exists; the
+working-side dump requires another Windows warm boot, and the comparison — masked by the
+volatility list — is the next experiment. It may well come back empty like the others.
+
+### 12.4 Status
+
+The root-cause question is open. The user-facing question is answered: the internal
+microphone on this machine can be made to work under Linux, on a stock kernel, by booting
+Windows once per power cycle. Everything else — reboots, suspend, driver reloads — is free.
+
+What this section adds to the record is mostly negative, and deliberately so. Six candidate
+surfaces were closed: the pad configuration of every pin on the SoC, PCI configuration
+space, the ACPI device tree, the clock tree, the codec's own topology, and 2400 vendor
+registers. A reader arriving at this problem should not spend time on any of them.

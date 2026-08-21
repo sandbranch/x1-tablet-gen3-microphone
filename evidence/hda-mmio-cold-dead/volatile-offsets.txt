@@ -1,0 +1,9 @@
+# offsets that changed between two back-to-back passes = free-running.
+# MASK THESE when diffing working vs dead.
+0x0030
+0x0048
+0x0058
+0x0c58
+0x0c98
+0x2030
+0x3030

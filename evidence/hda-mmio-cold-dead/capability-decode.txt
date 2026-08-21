@@ -1,0 +1,35 @@
+=== Intel HDA extended capability chain ===
+  @0x0c00  hdr=0x00020800  ID=0x2 ML (Multi-Link)                    next=0x0800
+  @0x0800  hdr=0x00030500  ID=0x3 PP (Processing Pipe / DSP)         next=0x0500
+  @0x0500  hdr=0x00011f00  ID=0x1 GTS (Global Time Sync)             next=0x1f00
+  @0x1f00  hdr=0x00050700  ID=0x5 DRSM (DMA Resume)                  next=0x0700
+  @0x0700  hdr=0x00040000  ID=0x4 SPB (Software Position Based FIFO) next=0x0000
+
+=== Multi-Link capability @0x0c00 (base 0x40, interval 0x40) ===
+  MLCD @0x0c04 = 0x00000001   (link count descriptor)
+
+  --- LINK 0  (base 0x0c40) <-- external HDA link: the ALC295
+    LCAP  = 0x00000007   ALT=legacy HDA
+    LCTL  = 0x00810002   SCF=2  SPA(set-power-active)=1  CPA(current-power-active)=1
+    LOSIDV      @0x0c48 = 0x0000fffe
+    LSDIID      @0x0c4c = 0x00000003
+    LPSOO/LPSIO @0x0c50 = 0x00020000
+    LWALFC      @0x0c58 = 0x0001d58d <VOLATILE, mask when diffing>
+    LSYNC       @0x0c5c = 0x00000000
+    LOUTPAY     @0x0c60 = 0x001c000d
+    LOUTPAY+4   @0x0c64 = 0x0000003c
+    LINPAY      @0x0c70 = 0x000d0005
+    LINPAY+4    @0x0c74 = 0x0000001d
+
+  --- LINK 1  (base 0x0c80) <-- iDisp / display audio
+    LCAP  = 0x0000001f   ALT=legacy HDA
+    LCTL  = 0x00810004   SCF=4  SPA(set-power-active)=1  CPA(current-power-active)=1
+    LOSIDV      @0x0c88 = 0x0000fffe
+    LSDIID      @0x0c8c = 0x00000004
+    LPSOO/LPSIO @0x0c90 = 0x00020002
+    LWALFC      @0x0c98 = 0x0001d78e <VOLATILE, mask when diffing>
+    LSYNC       @0x0c9c = 0x00000000
+    LOUTPAY     @0x0ca0 = 0x000b0003
+    LOUTPAY+4   @0x0ca4 = 0x0038001a
+    LINPAY      @0x0cb0 = 0x00000000
+    LINPAY+4    @0x0cb4 = 0x00000000

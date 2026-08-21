@@ -43,8 +43,13 @@ boot that came through Windows, `0x20 0x2b` reads `0x181` and the mic works. Aft
 suspend/resume on that same boot, it reads `0x0` — the stock value — **and the mic still
 works**. The only reliable test is to record something.
 
-**Suspend/resume does not cost you the microphone.** One Windows warm boot holds for the
-session, across folding the folio shut.
+**One Windows boot per *power cycle*, not per reboot.** The state is far more durable
+than it first appeared. It survives an S3 suspend, the codec's own D3 power-down, a
+`FUNCTION_RESET`, a full PCI remove-and-rescan, **and a warm reboot from Linux back into
+Linux with no Windows involved**. Reboot as often as you like; fold the folio shut as often
+as you like. Only removing power kills it, and that has been measured, not assumed: on a
+cold boot with music playing the capture comes back at rms 25 against 1600–3200 on a
+working boot, and the fingerprinting service returns no match.
 
 ## How the working state was verified
 
@@ -99,6 +104,18 @@ And the complete comparison finds nothing: a full 160-register × 15-node dump o
 separates them. The two *working* states in hand differ from each other more than either
 differs from a dead codec.
 
+**Nor is it anywhere else on the platform.** A sixteen-file capture of the entire
+surface around the controller — all 152 pinctrl pads with their pad-config registers, GPIO
+line state, PCI configuration space at both 256- and 4096-byte depth, the clock tree, the
+ACPI table list and every ACPI device's `_STA` — was taken on a working boot and again on a
+cold dead one. Everything relevant is **byte-identical**. The only differences are the
+camera PMIC's clock and GPIO lines (this tablet's *other* unsupported device, exercised on
+one boot and not the other), twenty lines of IRQ-number and PCIe link-training variation,
+and three lines of the capture's own mixer settings.
+
+For calibration: two *working* captures differ from each other by five pinctrl RX-level
+bits. Working and dead differ by less than working and working.
+
 So the thing Windows leaves behind is not a value that can be read and replayed.
 
 **The decisive demonstration is an S3 suspend/resume.** Across a 12-second `deep` suspend,
@@ -116,6 +133,22 @@ re-initialisation and dies only on power loss.
 
 That Windows starts a **clock or power domain** — plausibly the PDM/PLL supply for the
 digital microphone — which a warm reboot preserves and a power cycle stops.
+
+There is now a concrete address for it. The controller's **memory-mapped** register
+block had never been read — `lspci -xxxx` dumps PCI *configuration* space, which is a
+different thing — and reading it on a dead boot turns up a five-entry Intel
+extended-capability chain including a **Multi-Link** block. Link 0 is the external
+HD-audio link carrying the ALC295:
+
+    LCTL @0x0c40+0x04 = 0x00810002    SCF=2, SPA=1, CPA=1
+
+`LCTL.SCF` is the link **clock-frequency select**; `SPA` and `CPA` are the link's requested
+and actual power state. That is the first candidate in this investigation shaped like the
+answer instead of contradicting it: it lives **in the PCH rather than in the codec**, which
+is what a state surviving every codec reset and dying on power removal requires, and unlike
+every vendor coefficient chased here, **it is writable**. The working-side dump has not
+been taken yet, so this is a hypothesis with an address, not a result — it may come back
+empty like the others.
 
 It is the one explanation consistent with every observation: no static replay works; the
 registers that correlate are read-only status; the codec tree is unchanged; Windows state
@@ -136,6 +169,11 @@ The useful question for someone who knows this silicon: **what starts the digita
 microphone's clock domain on an ALC295, and what would preserve it across a warm reboot
 but not a power cycle?** A reproducible A/B is available on demand on this machine, which
 makes any suggestion cheap to test.
+
+A second, narrower question, for anyone who knows the Intel controller side: **can the
+HD-audio Multi-Link `LCTL` state — `SCF`, `SPA`/`CPA` — persist across a warm reset and
+account for this?** And is there a reason the link clock select would need to differ for a
+PDM microphone hanging off the codec.
 
 ## Is this your bug?
 
