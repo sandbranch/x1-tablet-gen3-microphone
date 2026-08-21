@@ -8,6 +8,13 @@ is left — including results that were published here and later corrected or re
 The negative results are the point as much as the positive ones: several of them close off
 whole methods, and two of them invalidate measurements that looked clean at the time.
 
+> **⭐ Read [§11](#11--2026-08-21--the-microphone-works-on-a-windows-warm-reboot) first.**
+> On 2026-08-21 the microphone was made to record real audio under Linux — verified by
+> third-party song identification — by warm-rebooting from Windows. It still cannot be
+> switched on from Linux alone. §11 also **excludes static vendor-register state and the
+> codec tree entirely**, which supersedes the framing of several sections below: §6's
+> replay results and §10's "what is left" are now closed questions, not open ones.
+
 ---
 
 ## 0. Corrections to the initial release
@@ -369,3 +376,157 @@ COEF write at all is the remaining shape the answer can take.
 
 Still open behind that: why `0x2b` and `0x67` refuse writes by any route, and the seven
 unswept vendor banks.
+
+---
+
+## 11. ⭐⭐⭐ 2026-08-21 — the microphone works, on a Windows warm reboot
+
+This section supersedes the framing of everything above it. The internal microphone is
+not merely alive; it records real, faithful audio under Linux on a stock kernel. It just
+cannot be switched on from Linux.
+
+### 11.1 The observation that cracked it
+
+Not a register value — a **timeline**. Reading `journalctl --list-boots` against the
+archived codec dumps showed that every dump holding the "rich" register state sat in a
+Linux boot that followed a **Windows session with no power loss**, and every dump holding
+stock values followed a **power cycle**. No exceptions across two days of samples.
+
+Both halves are necessary:
+
+- Windows state alone is not enough. A boot straight off Windows with the codec driver
+  suppressed (`snd_hda_intel.probe_only=3`) reads stock values — the state is there, but
+  nothing has built the capture path.
+- Linux init alone is not enough. Every cold boot is dead.
+
+**Windows' residual state + Linux's own init on top of it = a working microphone.**
+
+### 11.2 Confirmation
+
+Predicted, then tested: boot Windows to the desktop, warm-reboot into Linux, read the
+codec. The state reproduced on the first attempt.
+
+    reg          warm-from-Windows   previously-observed working   stock/dead
+    0x20 0x2b    0x181               0x181                         0x0
+    0x20 0x3a    0x38                0x3e                          0x10
+    0x20 0x40    0x88f0              0x88f0                        0x8800
+    0x20 0x0c    0x41ef              0x41ef                        0x1ef
+    0x5c 0x0f    0x0                 0x0                           0x1
+
+Then the audio, with output pins muted throughout — the loopback trap of §9 is excluded
+by construction, and every figure below is paired against a control:
+
+    point (boost/capture)   dead+speaking   warm+silence   warm+music   warm+speech
+    linux-default  3/63     630             2595           24278        23574  (clips 41%)
+    windows-values 0/52     7.6             28.9           550.6        735.2
+    boost0-maxcap  0/63     19.7            70.1           1500.5       1858.9
+
+`analyse-wav.py` returned **✅ real speech** at all three gain points. The clean witness is
+`boost0-maxcap`: no clipping, dc −0.3, frame RMS swinging 36..3232, `mod` 89, dynamic
+range 98×, voice-band share 52 %.
+
+Structural confirmation on the same music, same room, only the codec state differing:
+
+    capture                      beat autocorrelation   spectral flatness
+    music, dead/stock codec      0.067  (no beat)       0.97  (pure noise)
+    silence, warm-Windows        0.075  (no beat)       0.63
+    music, warm-Windows          0.607  (strong beat)   0.29  (tonal)
+
+Tempo 119.7 BPM, with the 59.8 half-time also present.
+
+**The decisive test was third-party.** 25 s of room audio through the internal microphone,
+percentile-normalised, submitted to a commercial acoustic-fingerprinting service: it
+returned the correct title, artist, album and year. Fingerprint matching depends on precise
+spectral peak positions and their timing offsets. Noise cannot match; a microphone with a
+badly wrong response cannot match either. This is the strongest available evidence that
+the DMIC *reproduces* sound rather than merely responding to it.
+
+### 11.3 The reverse bisect — static register state is excluded
+
+A live working codec permits the experiment nobody could run before: push **working →
+dead** and watch for a collapse, rather than pushing dead → working against registers that
+refuse to be written.
+
+Candidate set: every register differing between the working dump and **two independent
+dead dumps that agree with each other** — 2400 registers across 15 vendor nodes. Requiring
+the two dead samples to agree filters per-boot noise, and the filter validated itself by
+correctly discarding `0x20 0x10` and `0x20 0x36`, both previously reclassified as noise.
+That left 17 candidates: 13 on nid `0x20`, three on `0x58`, one on `0x5c`.
+
+**Thirteen of them were forced to their dead values simultaneously. The microphone kept
+working** — 1568 vs 2008 rms on a paired A/B, roughly 22× over the dead floor either way.
+That set includes `COEF 0x08`'s analog gate, `0x0c` bit 14, `0x3a` and `0x40`.
+
+The other four were eliminated individually:
+
+- `0x5c 0x0f` — forced to its dead `0x1`: 640 vs 725 restored. Negative. This had been the
+  last single-register candidate standing.
+- `0x20 0x2b` — **read-only**. Written with an arbitrary `0x5555` on the working codec, it
+  held `0x181` exactly. It refuses `0x181` on a dead codec and `0x0` here. Refusing in
+  both directions against an arbitrary value is a status register, not a control. The
+  "Windows fingerprint" register is an *effect*.
+- `0x58 0x09 / 0x18 / 0x1b` — Windows sends **zero verbs to nid `0x58`** in a full
+  3745-verb boot trace. Hardware amp calibration, re-run at power-on. They also do not
+  refuse writes, they *mask* them (`0x5555` → `0x4058` / `0x4040` / `0x1555`), and the
+  microphone kept working while they were perturbed.
+
+**And the codec tree is identical.** §5 concluded no tree question was answerable, because
+the link reset wipes the tree before any dump can be taken — true for post-teardown
+sampling, but a *live working codec* sidesteps it. `/proc/asound/card0/codec#0` live-working
+versus cold-boot-dead differs by **five lines in 287**, every one of them caused by the
+test's own mixer settings (the boost set to 0, the output mute, capture at 63).
+
+No observable static state — vendor registers or codec tree — distinguishes a working
+microphone from a dead one on this machine.
+
+### 11.4 What the ETW verb trace can and cannot answer
+
+In 3745 decoded verbs from a Windows boot: `SET_PROC_COEF` (verb `0x400`) and
+`GET_PROC_COEF` (`0xC00`) appear **zero times**, against **1657** `SET_COEF_INDEX`. The
+provider logs the index verb and drops the data verb. **COEF values are unrecoverable by
+this route** — do not re-mine the trace for them.
+
+The index histogram is still informative. Repeated selects of a few indices with no data
+verb between them is the signature of a **poll loop**: `0x29` 761 times, `0x26` 379 times,
+`0x2b` 107 times — and `0x2b` is now known to be read-only status. Windows appears to be
+waiting on something. Note also the scale: 1657 index selects during Windows boot against
+**two** COEF registers written by Linux init in total.
+
+### 11.5 The hypothesis
+
+That Windows starts a **clock or power domain** — plausibly the PDM/PLL supply for the
+digital microphone — which survives a warm reboot and stops on power loss.
+
+It is the only explanation so far consistent with all of: no static replay works; the
+correlating registers are read-only status; the codec tree is unchanged; Windows state
+alone is insufficient; Linux init alone is insufficient; and Windows polls a status
+register 107 times at boot.
+
+The discriminating experiment is **S3 suspend/resume on the live working state**. If the
+microphone survives, the state lives in codec silicon and the search returns to register
+or verb space. If it dies, it is a volatile power/clock domain, and the fix belongs in
+power-up sequencing rather than register replay.
+
+### 11.6 ⚠️ Two method traps caught by controls
+
+Both would have been published as findings if the control had not been run.
+
+**A key/chroma estimate is confounded by microphone response.** Krumhansl-Schmuckler key
+detection on the music capture returned "F# major", fit 0.845 — and returned F# major on
+**pure silence** (0.69) and on **dead-codec noise** (0.73). It was reading the microphone's
+own frequency colouring. Tempo autocorrelation, by contrast, separated cleanly (0.607 vs
+0.067). Report the tempo; discard the key.
+
+**Acoustic fingerprinting produces confident false matches on thin material.** The first
+submission — an un-normalised capture peaking at ~26 % of full scale — returned a
+specific, plausible, *wrong* track with full album and label metadata. The same audio,
+percentile-normalised, returned the correct one. Normalise before submitting, ignore
+transient clicks when computing the gain, and never treat a single identification as proof
+without a recognisable control.
+
+### 11.7 Practical note
+
+Until there is a native fix: boot Windows to the desktop, warm-reboot into Linux, and the
+microphone works for the rest of that Linux session. Use `Internal Mic Boost` **0** — the
+Linux default of 3 applies roughly +30 dB to this pin and clips about 40 % of samples into
+a DC rail, which is itself a measurement trap (§8).
