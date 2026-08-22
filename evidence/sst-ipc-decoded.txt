@@ -1,0 +1,83 @@
+# Intel SST DSP IPC, captured across one capture open on Windows.
+# payload = the cAVS IPC register dwords. bit31 = BUSY/valid.
+# seq	delta_us	dir	opcode	payload
+[  0] +        0us REQ   NOTIFICATION             
+[  2] +      103us REQ   LOAD_LIBRARY             lib_id=1 dma_id=31
+[  3] +     4913us REPLY LOAD_LIBRARY             lib_id=0 dma_id=0
+[  4] +        3us REPLY LOAD_LIBRARY             lib_id=0 dma_id=0
+[  7] +       87us REQ   LOAD_LIBRARY             lib_id=2 dma_id=31
+[  8] +     4910us REPLY LOAD_LIBRARY             lib_id=0 dma_id=0
+[  9] +        3us REPLY LOAD_LIBRARY             lib_id=0 dma_id=0
+[ 12] +      106us REQ   LOAD_LIBRARY             lib_id=3 dma_id=31
+[ 13] +     4881us REPLY LOAD_LIBRARY             lib_id=0 dma_id=0
+[ 14] +        3us REPLY LOAD_LIBRARY             lib_id=0 dma_id=0
+[ 17] +       82us REQ   LOAD_LIBRARY             lib_id=4 dma_id=31
+[ 18] +     3802us REPLY LOAD_LIBRARY             lib_id=0 dma_id=0
+[ 19] +        3us REPLY LOAD_LIBRARY             lib_id=0 dma_id=0
+[ 22] +   210400us REQ   CREATE_PIPELINE          ppl_instance=4 priority=0 mem_pages=1
+[ 23] +      102us REPLY CREATE_PIPELINE          ppl_instance=0 priority=0 mem_pages=0
+[ 24] +        2us REPLY CREATE_PIPELINE          ppl_instance=0 priority=0 mem_pages=0
+[ 27] +       36us REQ   INIT_INSTANCE            module_id=3 instance=0  ppl_instance=4 core=0 param_dwords=21
+      cpc=5000 ibs=192 obs=192 is_pages=0
+      in_fmt : 48000 Hz / 16-bit / 2ch (valid_bits=16 sample_type=0 chan_map=0xffffff20 chan_cfg=1 interleaving=0)
+      out_fmt: 48000 Hz / 16-bit / 2ch (valid_bits=16 sample_type=0 chan_map=0xffffff20 chan_cfg=1 interleaving=0)
+      feature_mask=0x0
+      GATEWAY: node_id=0x906 [dma_type=HDA_LINK_INPUT vindex=6] dma_buffer_size=384 config_length=0
+[ 28] +       92us REPLY INIT_INSTANCE            module_id=0 instance=0  ppl_instance=4 core=0 param_dwords=21
+[ 29] +        2us REPLY INIT_INSTANCE            module_id=0 instance=0  ppl_instance=4 core=0 param_dwords=21
+[ 32] +       51us REQ   INIT_INSTANCE            module_id=4 instance=0  ppl_instance=4 core=0 param_dwords=22
+      cpc=5000 ibs=192 obs=192 is_pages=0
+      in_fmt : 48000 Hz / 16-bit / 2ch (valid_bits=16 sample_type=0 chan_map=0xffffff20 chan_cfg=1 interleaving=0)
+      vol[0]: channel_id=0x0 target_volume=0x7fffffff curve_type=0 curve_duration=0
+      vol[1]: channel_id=0x0 target_volume=0x7fffffff curve_type=0 curve_duration=0
+[ 33] +       91us REPLY INIT_INSTANCE            module_id=0 instance=0  ppl_instance=4 core=0 param_dwords=22
+[ 34] +        2us REPLY INIT_INSTANCE            module_id=0 instance=0  ppl_instance=4 core=0 param_dwords=22
+[ 37] +       43us REQ   BIND                     module_id=3 instance=0  -> dst_module_id=4 dst_instance=0 dst_queue=0 src_queue=0
+[ 38] +       62us REPLY BIND                     module_id=0 instance=0  -> dst_module_id=4 dst_instance=0 dst_queue=0 src_queue=0
+[ 39] +        2us REPLY BIND                     module_id=0 instance=0  -> dst_module_id=4 dst_instance=0 dst_queue=0 src_queue=0
+[ 42] +       59us REQ   INIT_INSTANCE            module_id=3 instance=1  ppl_instance=4 core=0 param_dwords=21
+      cpc=5000 ibs=192 obs=192 is_pages=0
+      in_fmt : 48000 Hz / 16-bit / 2ch (valid_bits=16 sample_type=0 chan_map=0xffffff20 chan_cfg=1 interleaving=0)
+      out_fmt: 48000 Hz / 16-bit / 2ch (valid_bits=16 sample_type=0 chan_map=0xffffff20 chan_cfg=1 interleaving=0)
+      feature_mask=0x0
+      GATEWAY: node_id=0x0 [dma_type=HDA_HOST_OUTPUT vindex=0] dma_buffer_size=0 config_length=0
+[ 43] +       66us REPLY INIT_INSTANCE            module_id=0 instance=0  ppl_instance=4 core=0 param_dwords=21
+[ 44] +        2us REPLY INIT_INSTANCE            module_id=0 instance=0  ppl_instance=4 core=0 param_dwords=21
+[ 47] +       42us REQ   BIND                     module_id=4 instance=0  -> dst_module_id=3 dst_instance=1 dst_queue=0 src_queue=0
+[ 48] +       60us REPLY BIND                     module_id=0 instance=0  -> dst_module_id=3 dst_instance=1 dst_queue=0 src_queue=0
+[ 49] +        2us REPLY BIND                     module_id=0 instance=0  -> dst_module_id=3 dst_instance=1 dst_queue=0 src_queue=0
+[ 52] +       60us REQ   CREATE_PIPELINE          ppl_instance=5 priority=1 mem_pages=1
+[ 53] +      107us REPLY CREATE_PIPELINE          ppl_instance=0 priority=0 mem_pages=0
+[ 54] +        2us REPLY CREATE_PIPELINE          ppl_instance=0 priority=0 mem_pages=0
+[ 57] +       22us REQ   INIT_INSTANCE            module_id=3 instance=2  ppl_instance=5 core=0 param_dwords=21
+      cpc=5000 ibs=192 obs=192 is_pages=0
+      in_fmt : 48000 Hz / 16-bit / 2ch (valid_bits=16 sample_type=0 chan_map=0xffffff20 chan_cfg=1 interleaving=0)
+      out_fmt: 48000 Hz / 16-bit / 2ch (valid_bits=16 sample_type=0 chan_map=0xffffff20 chan_cfg=1 interleaving=0)
+      feature_mask=0x0
+      GATEWAY: node_id=0x101 [dma_type=HDA_HOST_INPUT vindex=1] dma_buffer_size=1920 config_length=0
+[ 58] +       89us REPLY INIT_INSTANCE            module_id=0 instance=0  ppl_instance=5 core=0 param_dwords=21
+[ 59] +        2us REPLY INIT_INSTANCE            module_id=0 instance=0  ppl_instance=5 core=0 param_dwords=21
+[ 62] +       42us REQ   BIND                     module_id=3 instance=1  -> dst_module_id=3 dst_instance=2 dst_queue=0 src_queue=0
+[ 63] +      109us REPLY BIND                     module_id=0 instance=0  -> dst_module_id=3 dst_instance=2 dst_queue=0 src_queue=0
+[ 64] +        2us REPLY BIND                     module_id=0 instance=0  -> dst_module_id=3 dst_instance=2 dst_queue=0 src_queue=0
+[ 67] +     4103us REQ   SET_PIPELINE_STATE       state=PAUSED  multi_ppl: count=2 ids=[5, 4]
+[ 68] +       59us REPLY SET_PIPELINE_STATE       state=INVALID
+[ 69] +        2us REPLY SET_PIPELINE_STATE       state=INVALID
+[ 72] +    38481us REQ   SET_PIPELINE_STATE       state=RUNNING  multi_ppl: count=2 ids=[5, 4]
+[ 73] +       42us REPLY SET_PIPELINE_STATE       state=INVALID
+[ 74] +        2us REPLY SET_PIPELINE_STATE       state=INVALID
+[ 77] + 12311091us REQ   SET_PIPELINE_STATE       state=PAUSED  multi_ppl: count=2 ids=[4, 5]
+[ 78] +       48us REPLY SET_PIPELINE_STATE       state=INVALID
+[ 79] +        3us REPLY SET_PIPELINE_STATE       state=INVALID
+[ 82] +    93397us REQ   SET_PIPELINE_STATE       state=RESET  multi_ppl: count=2 ids=[4, 5]
+[ 83] +       41us REPLY SET_PIPELINE_STATE       state=INVALID
+[ 84] +        3us REPLY SET_PIPELINE_STATE       state=INVALID
+[ 87] +      792us REQ   UNBIND                   module_id=3 instance=1  -> dst_module_id=3 dst_instance=2 dst_queue=0 src_queue=0
+[ 88] +       32us REPLY UNBIND                   module_id=0 instance=0  -> dst_module_id=3 dst_instance=2 dst_queue=0 src_queue=0
+[ 89] +        3us REPLY UNBIND                   module_id=0 instance=0  -> dst_module_id=3 dst_instance=2 dst_queue=0 src_queue=0
+[ 92] +       53us REQ   DELETE_PIPELINE          ppl_instance=5
+[ 93] +       51us REPLY DELETE_PIPELINE          ppl_instance=0
+[ 94] +        2us REPLY DELETE_PIPELINE          ppl_instance=0
+[ 97] +       63us REQ   DELETE_PIPELINE          ppl_instance=4
+[ 98] +       45us REPLY DELETE_PIPELINE          ppl_instance=0
+[ 99] +        2us REPLY DELETE_PIPELINE          ppl_instance=0

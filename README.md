@@ -129,51 +129,82 @@ registers and a working one. The registers therefore cannot be what distinguishe
 states: they are symptoms of it. Whatever Windows leaves behind survives a full codec
 re-initialisation and dies only on power loss.
 
-## The current hypothesis
+## What is left
 
-That Windows starts a **clock or power domain** — plausibly the PDM/PLL supply for the
-digital microphone — which a warm reboot preserves and a power cycle stops.
+Every surface this project could read has now been read on a working boot and a dead one,
+and they are the same. The list is worth stating plainly so nobody repeats it:
 
-There is now a concrete address for it. The controller's **memory-mapped** register
-block had never been read — `lspci -xxxx` dumps PCI *configuration* space, which is a
-different thing — and reading it on a dead boot turns up a five-entry Intel
-extended-capability chain including a **Multi-Link** block. Link 0 is the external
-HD-audio link carrying the ALC295:
+| surface | result |
+|---|---|
+| ~2400 codec registers, all 8 vendor COEF banks | nothing separates working from dead |
+| codec verbs as static state **and** replayed in Windows' exact order | negative |
+| the codec tree / topology | identical |
+| 152 pinctrl pads, PCI config space, ACPI, the clock tree | identical |
+| the full 16 KiB HD-audio controller **BAR0**, including `LCTL`/`SCF` and `PPCTL` | **identical** |
+| the **DSP** — resident state and its loaded libraries | survives a full core reset ⇒ excluded |
+| all four PCH **GPIO communities**, including the deep-well GPD pads pinctrl never binds | identical |
+| the **PMC**, the **EC**, I²C enumeration | identical, or explained as charger telemetry |
+| firmware / BIOS / ME acting on their own | excluded — disabling the Windows audio stack kills it |
+| a slowly-decaying rail or stored charge | excluded — 30 seconds without power is enough |
 
-    LCTL @0x0c40+0x04 = 0x00810002    SCF=2, SPA=1, CPA=1
+An earlier version of this README proposed the HD-audio Multi-Link `LCTL.SCF` link clock as
+the answer. **That is now measured and negative**: `SCF` is 2 on a working boot, a dead boot,
+and under Windows. The whole 16 KiB register block is byte-identical between working and
+dead. Kept here rather than quietly deleted, because which way the evidence pointed before
+it was tested is part of the record.
 
-`LCTL.SCF` is the link **clock-frequency select**; `SPA` and `CPA` are the link's requested
-and actual power state. That is the first candidate in this investigation shaped like the
-answer instead of contradicting it: it lives **in the PCH rather than in the codec**, which
-is what a state surviving every codec reset and dying on power removal requires, and unlike
-every vendor coefficient chased here, **it is writable**. The working-side dump has not
-been taken yet, so this is a hypothesis with an address, not a result — it may come back
-empty like the others.
+Four things *are* established:
 
-It is the one explanation consistent with every observation: no static replay works; the
-registers that correlate are read-only status; the codec tree is unchanged; Windows state
-*alone* is insufficient (a boot with the Linux codec driver suppressed, straight off
-Windows, is dead — the state is present but nothing has built the capture path); and Linux
-init alone is insufficient. Working = Windows' residual state **plus** Linux's own init on
-top of it.
+1. **The audio arrives over the HD-audio link from the codec — not over the SoC's PDM/DMIC
+   interface.** Windows' own DSP pipeline, decoded from an IPC trace of a live capture, uses
+   gateway type `HDA_LINK_INPUT`, not `DMIC_LINK_INPUT`. Both operating systems pull this
+   microphone through the ALC295. Linux even does it with the DSP processing pipe globally
+   disabled. This kills the "the PDM interface is unarmed" reading that a lot of this
+   investigation assumed.
+2. **The Realtek codec function driver `RTKVHD64.sys` is necessary.** Disable only it in
+   Windows, leave the controller and DSP running, warm-reboot — dead. Disable the whole
+   controller — also dead.
+3. **But its codec verbs are not the mechanism.** All 256 CORB entries from a Windows boot,
+   replayed in true ring order with the read-backs in place and the resulting state verified
+   still live afterwards, leave the microphone dead.
+4. **The state lives in a power domain kept across S3 and lost at S4/S5.** It survives
+   suspend, D3, `FUNCTION_RESET`, a full PCI re-probe, a DSP core reset, and Linux→Linux warm
+   reboots. Hibernation kills it, and so does 30 seconds unplugged.
 
-Consistent with this, the Windows driver issues **1657 COEF index selects** during boot
-where Linux writes **two registers total**, and repeatedly re-selects a small number of
-indices — `0x29` 761 times, `0x26` 379 times, `0x2b` 107 times — with no data verb between
-them. That is the signature of a poll loop, and `0x2b` is now known to be read-only
-status. Windows appears to be waiting on something.
+So: something that survives a complete codec re-initialisation *and* a complete DSP reset,
+persists across warm reboots indefinitely, dies within seconds of power removal — and is
+invisible in every register on the platform that Linux can read.
 
 ## If you can help
 
-The useful question for someone who knows this silicon: **what starts the digital
-microphone's clock domain on an ALC295, and what would preserve it across a warm reboot
-but not a power cycle?** A reproducible A/B is available on demand on this machine, which
-makes any suggestion cheap to test.
+This is published because it is stuck, not because it is solved. A **switchable A/B is
+available on demand** on this machine — boot Windows, warm reboot, the microphone works;
+power-cycle, it does not — which makes any suggestion cheap to test, and results come back
+the same day. Concrete questions, most useful first:
 
-A second, narrower question, for anyone who knows the Intel controller side: **can the
-HD-audio Multi-Link `LCTL` state — `SCF`, `SPA`/`CPA` — persist across a warm reset and
-account for this?** And is there a reason the link clock select would need to differ for a
-PDM microphone hanging off the codec.
+1. **What can `RTKVHD64.sys` do to an ALC295 that is not a codec verb and not DSP-resident
+   state?** It is necessary, its verbs are excluded, and the DSP has been reset out from
+   under a working state without killing it. On this platform the codec enumerates on the
+   SST bus (`INTELAUDIO\FUNC_01`), so the driver also speaks DSP IPC — but the libraries it
+   loads are demonstrably not the mechanism. What other channel is there?
+
+2. **Is there state on an ALC295 that is not addressable through the verb or COEF
+   interfaces, and that clears only on VDD loss?** Everything observed fits a latch inside
+   the codec that the documented interfaces cannot read back. If that exists, this whole
+   investigation has been looking at the wrong side of the link.
+
+3. **For the Intel controller side:** with `PPCTL` = 0 and the DSP pipe disabled, the legacy
+   `snd_hda_intel` path captures real audio from this microphone on a warm boot and silence
+   on a cold one, with byte-identical controller registers. What differs that a register
+   dump would not show?
+
+4. **Has anyone seen this shape before** — a device that a Windows boot arms for the rest of
+   the power cycle, across arbitrary warm reboots, with no readable state difference? The
+   shape may be more familiar to someone than the specific silicon.
+
+If you want to test something, the tools are in [tools/](tools/): platform and MMIO capture,
+the four deep-well surfaces, the SST/IPC decoder, the CORB replayer, and the capture
+analyser that scores a recording against a control instead of trusting it.
 
 ## Is this your bug?
 

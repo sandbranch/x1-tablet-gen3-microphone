@@ -713,6 +713,12 @@ than working and working.
 
 ### 12.3 The last unread surface: the controller's MMIO block
 
+> ⚠️ **Superseded — read §13.1 before this section.** The `LCTL` / `SCF` link-clock
+> hypothesis developed below was tested on 2026-08-22 and is **negative**. The full 16 KiB
+> BAR0 is byte-identical between a working boot and a dead one. The section is kept intact
+> because the method is reusable and because a reader deserves to see which way the
+> evidence actually pointed before it was tested.
+
 One gap remained, and it is worth naming precisely because it had been quietly assumed
 away: `lspci -xxxx` dumps PCI **configuration** space. It does not touch the controller's
 **memory-mapped** register block, which is where the HD-audio controller actually lives.
@@ -775,3 +781,292 @@ What this section adds to the record is mostly negative, and deliberately so. Si
 surfaces were closed: the pad configuration of every pin on the SoC, PCI configuration
 space, the ACPI device tree, the clock tree, the codec's own topology, and 2400 vendor
 registers. A reader arriving at this problem should not spend time on any of them.
+
+---
+
+## 13. ⭐⭐⭐ 2026-08-22 — the readable surfaces are now genuinely exhausted
+
+Section 12 ended with one hypothesis holding an address: the controller's memory-mapped
+register block, and specifically the HD-audio Multi-Link `LCTL.SCF` link-clock select.
+This section tests it, tests four more things, and closes all of them.
+
+Everything below was measured on a machine where the working state can be switched on
+demand — boot Windows, warm-reboot into Linux — so each result is a one-variable
+comparison against a control taken on the same boot, not a comparison between two
+different days.
+
+**Method note, and it matters.** Every negative here is paired with a **positive control**
+on the same or an adjacent boot: a commercial acoustic-fingerprinting service identifying a
+real track through the internal microphone. Without that, a negative result is
+indistinguishable from an oracle that quietly broke — which nearly happened once (§13.2).
+Captures are scored raw and 100 Hz high-passed; the dead side has essentially no noise
+floor, so the high-passed RMS is the discriminator. Dead floor is **HP100 ≈ 17**.
+
+### 13.1 🔴 BAR0 is excluded — and `GPROCEN` is not the mechanism
+
+The working-side dump that §12.3 was waiting for was taken on a warm-from-Windows boot on
+2026-08-22 at 08:10. Positive control on that boot: correct track identified from 25 s of
+room audio. Then the full 16 KiB BAR0 was dumped and diffed against the cold-dead dump.
+
+    differing offsets, after masking the 7 known volatiles
+    (0x30 0x48 0x58 0xc58 0xc98 0x2030 0x3030):     0 of 4096
+
+Zero. A **working** controller and a **dead** one are byte-identical across their entire
+memory-mapped register block.
+
+Two specific things die with it:
+
+* **`LCTL` link 0 = `0x00810002`** on the working boot, the dead boot, and — from the
+  Windows-side dump — under Windows too. `SCF` is 2 everywhere, in every state, under both
+  operating systems. 🔴 The link-clock hypothesis of §12.3 is **negative**.
+* **`PPCTL @0x0804` = `0x00000000` on the working Linux boot.** Windows idles at
+  `0xc00003c1` — `PIE` plus `GPROCEN`, the DSP processing-pipe enable. So Linux captures
+  real audio from the internal microphone **with the processing pipe globally disabled**.
+  `GPROCEN` is how Windows routes its audio; it is not what makes the microphone work.
+  🔴 Negative as a fix.
+
+Every Windows-vs-Linux delta in the controller registers — `WAKEEN`, `LOSIDV`, the iDisp
+link power bits — is Linux-identical between warm-working and cold-dead, so it is
+cross-driver noise rather than the mechanism.
+
+### 13.2 🔴 Is the Windows stack even necessary? Tests A2 and A1
+
+Before spending more effort reverse-engineering the Windows driver, two experiments bounded
+what part of Windows is doing this. Both work by disabling a layer **in Windows**, doing a
+full power off, cold-booting Windows, verifying the layer really is absent, then warm
+rebooting into Linux and recording.
+
+**A2 — disable the PCI audio controller.** No kernel driver issues a single verb to the
+codec that boot; the DSP is never brought up.
+
+**A1 — disable only the Realtek codec function driver** (`INTELAUDIO\FUNC_01&VEN_10EC&
+DEV_0295&…`), leaving the controller and the DSP bring-up intact and running.
+
+| capture | raw RMS | **HP100 RMS** | distinct | identified |
+|---|---|---|---|---|
+| cold-dead-2 room tone | 17.9 | 16.21 | 165 | — |
+| A1 room tone (same boot, silent) | 28.0 | **17.04** | 553 | — |
+| **A1 + music** | 31.6 | **16.97** | 544 | **no** |
+| **A2 + music** | 89.0 | **18.11** | 1638 | **no** |
+| working boot + music | 2904.6 | **1299.82** | 30021 | **yes** |
+
+Both negative. Playing music moved the A1 capture by **−0.07 RMS** against that boot's own
+silent floor, and no match came back even at 510× gain.
+
+* ✅ **A2 excludes firmware, BIOS and the ME** arming the microphone on their own. Something
+  in the Windows audio stack is a genuine prerequisite.
+* ✅ **A1 shows `RTKVHD64.sys` is necessary** — remove only the codec function driver and the
+  arming dies, though everything upstream came up normally.
+* 🔴 **A1 also shows the DSP alone is not sufficient.** A1 is exactly the condition where the
+  DSP core is powered and running and nothing else happens, and the microphone stayed dead.
+
+⚠️ **Two negatives in a row is when an oracle should be distrusted.** A1 and A2 cost three
+power cycles, a debug-boot flag change and two disable/restore cycles between them and the
+last confirmed positive. A positive control was therefore run before either negative was
+allowed to count: restore everything, full power off, normal cold Windows boot, warm reboot,
+record. It came back a **match**. Both negatives stand.
+
+### 13.3 🔴 The codec verb interface, tried as a *sequence* — negative
+
+Earlier sections excluded static vendor-register state. They did not exclude the
+possibility that the *order* of Windows' writes matters — that the codec is a state machine
+and the values are only the residue of the walk.
+
+A full CORB ring capture from Windows gave 256 entries with their payloads. `replay-corb.py`
+replays all of them in true chronological ring order (write pointer `0x91`, so 146..255 then
+0..145), decoded with the kernel's own command-packing rule, with the `GET_PROC_COEF`
+read-backs left in place and interleaved with the pin, amp, power and stream verbs that
+bracket them. The burst is 53 `SET_AMP_GAIN_MUTE`, 42 `SET_COEF_INDEX`, 28 `SET_PROC_COEF`,
+14 `GET_PROC_COEF`, 9 `GET_PIN_SENSE` and the rest.
+
+| capture | raw RMS | HP100 RMS | identified |
+|---|---|---|---|
+| same-boot silent floor | 28.0 | 17.04 | — |
+| **ordered replay + music** | 21.3 | **17.30** | **no** |
+
+**The validity control is what makes this load-bearing.** The replayed state was read back
+*after* the recording and was still live and still exactly the Windows values —
+`0x03=0x0002 0x05=0x0700 0x08=0x6a0c 0x0c=0x41ef 0x10=0x0220 0x11=0x0000`, and `nid 0x5c
+0x0f=0x0000`. The codec really was in the Windows post-restart state, reached in the Windows
+order, and it captured nothing.
+
+🔴 **The codec verb interface is now excluded as state and as sequence.** Note in passing
+that `0x0c = 0x41ef` — bit 14, the long-standing standout — does latch, and changes nothing
+on its own.
+
+### 13.4 ⭐⭐⭐ What Windows actually does: the DSP IPC trace, decoded
+
+Since the codec's verbs are not the mechanism but its driver is required, the remaining
+Windows-side channel is DSP IPC, which never appears in the CORB ring. A trace of one
+capture-open was captured on Windows and decoded field-by-field against the kernel's own
+`sound/soc/intel/avs/messages.h`:
+
+    LOAD_LIBRARY lib_id=1..4, dma_id=31            (~4.9 ms each, at capture-open)
+    CREATE_PIPELINE ppl=4 prio=0 / ppl=5 prio=1
+    ppl 4: copier(mod 3,inst 0) GATEWAY node_id=0x906 [HDA_LINK_INPUT vindex=6] buf=384
+        -> peakvol(mod 4,inst 0) 2ch target_volume=0x7fffffff (unity, no curve)
+        -> copier(mod 3,inst 1) no gateway
+    ppl 5: copier(mod 3,inst 2) GATEWAY node_id=0x101 [HDA_HOST_INPUT vindex=1] buf=1920
+    BIND 3:0->4:0, 4:0->3:1, 3:1->3:2
+    SET_PIPELINE_STATE PAUSED -> RUNNING -> (12.3 s capture) -> PAUSED -> RESET
+
+#### 🚨 The gateway is `HDA_LINK_INPUT`, not `DMIC_LINK_INPUT`
+
+`dma_type` 9, not 11. **Windows does not use the PCH's dedicated PDM/DMIC interface at
+all.** The microphone audio arrives at the DSP over the HD-audio link from the ALC295 —
+exactly the source Linux's own legacy path already uses.
+
+This is the single most useful positive fact in the whole section:
+
+* It **kills the "the PDM interface is unarmed" family of hypotheses**, which is where the
+  investigation had been pointing for two days.
+* It **independently explains A1**: the codec must be streaming onto the link, so the codec
+  function driver is necessarily required — which is what A1 measured.
+* It means the difference between working and dead is *not* a different data path. Both
+  operating systems pull the microphone through the codec and over the link. Linux even
+  does it with the DSP pipe disabled entirely (§13.1).
+
+Decoder and full decoded trace ship in [tools/decode-sst-ipc.py](tools/decode-sst-ipc.py)
+and [evidence/sst-ipc-decoded.txt](evidence/sst-ipc-decoded.txt).
+
+### 13.5 🔴 DSP-resident state is excluded
+
+The four `LOAD_LIBRARY` calls run at capture-open and are **never undone** — the pipelines
+are deleted at the end of the trace, the libraries are not. Since Linux's `snd_hda_intel`
+never touches the DSP aperture, anything left in DSP memory would survive a warm reboot and
+be wiped by a power cycle. That is exactly the observed shape, so it was pre-registered as a
+hypothesis and tested.
+
+On a confirmed-armed boot, the DSP was fully reset without rebooting, by swapping the audio
+stack over to the AVS driver — `snd_intel_dspcfg dsp_driver=4`, then `snd_soc_avs`, whose
+probe path runs `avs_dsp_core_disable(AVS_MAIN_CORE_MASK)` and a **purge** boot of Linux's
+own firmware. Any Windows-resident libraries were destroyed. Then the stack was swapped back.
+
+| stage | raw RMS | HP100 RMS |
+|---|---|---|
+| pre-test, legacy path | 2167.2 | 1861.9 |
+| on the AVS card, DSP path | 9992.6 | 8775.5 |
+| **post-reset, legacy path** | 1344.7 | **1050.7** |
+
+Then a full identification run: **match**, on a *different* track from the pre-test control,
+so it was reading live room audio and not a cached result.
+
+🔴 **DSP-resident state is excluded.** The loaded libraries are not the mechanism.
+
+(Incidental but useful to anyone testing the AVS driver on this machine: on an armed boot
+AVS captures fine, about 8× the legacy path's level, with local playback stopped so there is
+no loopback confound. The earlier negative AVS result was measured only on a *dead* boot.)
+
+### 13.6 The power boundary, measured: S3 survives, S4 does not
+
+The state survives S3 suspend, D3, `FUNCTION_RESET`, PCI re-probe and Linux→Linux warm
+reboot (§11.9). Hibernation is the interesting case: **S4 writes the image and then removes
+power**, so it separates "software reset" from "power removal" precisely.
+
+Real ACPI S4 (`/sys/power/disk` = `platform`, hibernation confirmed by the swap header
+having been rewritten with the suspend signature on the way down):
+
+| capture | raw RMS | HP100 RMS | distinct |
+|---|---|---|---|
+| armed, minutes before | 1410.4 | **627.1** | 9031 |
+| after S4 resume | 28.1 | **17.5** | 373 |
+
+🔴 **S4 kills it**, like S5. And a second answer rode along for free: power was out for only
+**~30 seconds** and the arming was still gone, so 🔴 **charge or capacitive decay is
+excluded** — this is not a rail coasting down slowly, it is a domain that loses power.
+
+That places the state in a domain powered across S3 and dropped at S4/S5 — in PCH terms,
+the deep-sleep and suspend wells.
+
+### 13.7 🔴 The deep-well surfaces — including one the kernel could not see
+
+Following §13.6, four surfaces in the right power domain were dumped on a dead boot and again
+on an armed one. One of them had never been readable by any earlier capture in this project,
+and finding that was the only genuinely *positive* localisation the investigation produced.
+
+#### The blind spot was real
+
+`INT344B:00` — the pinctrl driver — claims **three** GPIO community apertures in
+`/proc/iomem`: `fdac0000`, `fdae0000`, `fdaf0000`. The fourth, **`fdad0000`, is claimed by
+`PNP0C02:00`**, the generic motherboard-resources placeholder, and is never bound by
+pinctrl. Verified rather than inferred:
+
+* `gpiochip0` reports **152** GPIOs. This PCH has **164** — 152 in GPP_A–G plus 12 in GPD.
+* All 12 GPD signal names — `SLP_S3`, `SLP_S4`, `SLP_A`, `SUSCLK`, `SLP_WLAN`, `SLP_S5`,
+  `ACPRESENT`, `LANPHYPC` and the rest — return **zero hits** in the pinctrl `pins` file.
+* Reading `fdad0000` directly shows the standard Intel community layout (`PADBAR` at `+0x0c`
+  = `0x400`) with **exactly 12 pad-config pairs** at `fdad0400`–`fdad0458`. 12 pads = GPD.
+
+**GPD is the group in the deep-sleep well** — powered across S3, dropped at S4/S5. That is
+precisely the signature §13.6 established. And every "pinctrl is byte-identical" claim in
+§12.2 was blind to it, because `capture-platform-state.sh` reads the pinctrl driver's own
+files and the driver does not own that aperture.
+
+#### And it is negative anyway
+
+`dump-four-surfaces.sh` reads all four communities' full 64 KiB apertures through
+`/dev/mem`, plus the PMC, the EC's 256 bytes of RAM and the I²C enumeration. Dead baseline
+and armed dump, positive control on the armed boot first (correct track identified from
+**8 seconds** of room audio — raw RMS 959, 7639 distinct values):
+
+| surface | armed vs dead |
+|---|---|
+| `fdad0000` — the 12 GPD pads pinctrl never binds | **md5-identical** |
+| `fdac0000` / `fdae0000` / `fdaf0000` | **md5-identical** |
+| PMC (`pmc_core`) | identical but for the free-running Package C2–C9 residency counters |
+| I²C enumeration | identical but for an `i2c-5`/`i2c-6` probe-order swap |
+| EC RAM | 25 bytes differ — see below |
+
+🔴 **No PCH GPIO pad state and no PMC state carries the arming.**
+
+#### The EC very nearly produced a false positive
+
+EC RAM had no established noise floor, so one was measured: nine further samples across
+three minutes **on the same armed boot**. Nineteen of the 25 differing bytes move on their
+own. The 13 survivors looked exactly right — host-written, zero after hibernation, non-zero
+after a Windows warm reboot.
+
+The DSDT names them. `Field (ECOR)` gives `0x49` as AC-adapter and link bits, and
+`0xd6`–`0xe1` as six 16-bit **subsystem power-budget limits** — `CPLO/CPHI`, `PCLO/PCHI`,
+`WLLO/WLHI`, `MELO/MEHI`, `CGLO/CGHI`, `SDLO/SDHI` — all `0x0000` → `0x05c7`. Six power caps
+and a charger descriptor, on a boot that was on mains against a baseline that was not.
+
+🔴 Not an audio carrier. **The lesson generalises: decode EC offsets against the DSDT before
+believing any EC delta.** [tools/ec-analyse.py](tools/ec-analyse.py) does the floor
+intersection.
+
+### 13.8 Where this leaves it
+
+The user-facing answer is unchanged and still works: **boot Windows once per power cycle,
+warm-reboot into Linux, and the internal microphone records real audio on a stock kernel.**
+
+The root cause is open, and the space left to search is now small and awkward. Closed
+surfaces, none of which a reader should spend time on:
+
+| surface | result |
+|---|---|
+| ~2400 codec registers, all 8 vendor COEF banks | zero separate working from dead |
+| the codec tree / topology | identical |
+| codec verbs as static state **and** as ordered sequence | negative |
+| 152 pinctrl pads, PCI config space, ACPI, clock tree | identical |
+| **the full 16 KiB HDA BAR0**, `LCTL`/`SCF`, `PPCTL`/`GPROCEN` | identical / negative |
+| **the DSP** — resident state, loaded libraries | survives a full core reset ⇒ excluded |
+| **all four GPIO communities, including the unbound GPD deep-well pads** | identical |
+| **the PMC**, the EC, I²C enumeration | identical / explained |
+| firmware, BIOS, ME acting alone | excluded by A2 |
+| a slowly-decaying rail or stored charge | excluded — 30 s off is enough to kill it |
+
+What is *established*, positively:
+
+1. The audio path is **the codec over the HD-audio link**, on both operating systems. Not
+   the SoC's PDM interface (§13.4).
+2. `RTKVHD64.sys` is **necessary**; the DSP alone is **not sufficient** (§13.2).
+3. Its **codec verbs are not the mechanism** (§13.3) — so whatever it does, it does over DSP
+   IPC or some other channel.
+4. The state lives in a domain **powered across S3 and lost at S4/S5**, and is not carried by
+   any register, pad, or memory this project has been able to read (§13.6, §13.7).
+
+That combination is genuinely strange, and it is the reason this is being published rather
+than solved. Something that survives a full codec re-initialisation, a full DSP core reset,
+and a warm reboot, but dies within 30 seconds of power removal, and is invisible in every
+readable register on the platform.
