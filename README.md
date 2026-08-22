@@ -240,12 +240,20 @@ ASUS pin quirks whose fixups add nothing at all for the internal mic — the dig
 microphone works on other ALC295 machines with zero DMIC-specific code. This is
 machine-specific.
 
-## `retracted/`
+## A retracted result, kept in the write-up
 
-An earlier version of this release shipped a fix based on `COEF 0x07` bit 10. **That fix
-is void** — the register enables an internal DAC→ADC loopback, so the "microphone" was
-recording the machine's own playback. It is kept, with a full account of how it passed
-review, in [retracted/RETRACTED.md](retracted/RETRACTED.md). Do not install it.
+An earlier version of this work claimed a fix based on `COEF 0x07` bit 10 — "the DMIC is
+not clocked unless this is set". It was wrong, and wrong in an instructive way: that bit
+enables an internal DAC→ADC loopback, so the "microphone" was recording the machine's own
+playback. The tone tests were real; the interpretation was not. What exposed it was
+re-running them with every output pin muted — a real acoustic path goes quiet, and this one
+got *louder*, returning a full-scale square wave with two distinct sample values.
+
+The patch is not shipped here. Installing it would make a machine record its own playback
+and appear fixed, which is worse than leaving the microphone silent. The full account of
+how it passed review is in [FINDINGS.md](FINDINGS.md) §9, and the rule that came out of it —
+mute the output pins before believing any microphone result — is in
+[tools/README.md](tools/README.md).
 
 ## Prior art
 

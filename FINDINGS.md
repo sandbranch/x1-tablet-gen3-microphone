@@ -329,7 +329,9 @@ Every one of these produced a wrong result here before it was understood.
 
 ## 9. Retracted results, and why they survived review
 
-Kept deliberately — both are instructive, and both are shipped in `retracted/`.
+Kept deliberately — both are instructive. The void patch itself is **not** shipped:
+it enabled an internal loopback, so installing it makes a machine record its own
+playback and look fixed. The account below is the part worth keeping.
 
 **`COEF 0x07` bit 10 "DMIC clock enable".** It is an internal DAC→ADC loopback. Tone tests
 recovered 1 kHz at over a million times the median bin and tracked frequency across two
