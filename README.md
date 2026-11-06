@@ -298,4 +298,9 @@ Full detail, including corrections and dead ends, in [FINDINGS.md](FINDINGS.md).
 
 ## Licence
 
-See [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE) — with one exception.
+
+The kernel patch `0001-ALC295-x1-tablet-dmic.patch` is a modification of Linux
+(`sound/hda/codecs/realtek/alc269.c`) and is necessarily **GPL-2.0-only**, like the file it
+patches. Everything else here — the patch-firmware file, the modprobe configuration, the
+installer and the documentation — is MIT.
