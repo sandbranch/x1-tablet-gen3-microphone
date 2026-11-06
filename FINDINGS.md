@@ -137,6 +137,25 @@ agreeing:
 
 **Bits 2 and 3 must both be set for the analog input to pass.** Bit 7 is irrelevant to it.
 
+### This role is not universal across ALC295 implementations
+
+Everything above is measured on **this machine, PCI SSID `17aa:2244`**, and holds there.
+It does **not** generalise, and a second machine has now shown where it breaks.
+
+On an **Acer Nitro AN515-57 (SSID `1025:1539`)**, reported independently by
+[Onassis-San](https://github.com/sandbranch/x1-tablet-gen3-microphone/issues/2),
+`COEF 0x08` reads `0x6a0c` in **both** the dead and the working state — there is no
+`0x6a8c`/`0x6a0c` split to observe. Writing `0x6a00` there while the microphone is
+*working* does not produce silence: it **stalls the capture stream**. One attempt returned
+`EIO` from `arecord`; retries delivered roughly a second of data and then hung until
+killed. Restoring `0x6a0c` restored streaming immediately, re-tested with PipeWire and
+WirePlumber stopped and no other client involved.
+
+So on one implementation these bits gate the analog source cleanly, and on another they
+appear entangled with the streaming path itself — while the underlying
+Windows-arms-it-for-the-power-cycle behaviour is identical on both. Treat "`COEF 0x08`
+bits 2+3 are the analog input gate" as a finding about `17aa:2244`, not about the ALC295.
+
 ### Two independent controls
 
 **Electrical.** With the bits cleared (silence), enabling the codec's internal DAC→ADC

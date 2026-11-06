@@ -229,16 +229,42 @@ unconnected analog input.
     sudo hda-verb /dev/snd/hwC0D0 0x20 SET_COEF_INDEX 0x08
     sudo hda-verb /dev/snd/hwC0D0 0x20 SET_PROC_COEF 0x6a00
 
-Capture then returns exact zeros. This is *not* "what Windows does" — see FINDINGS §5.
+Capture then returns exact zeros.
+
+> **Only verified on PCI SSID `17aa:2244`.** On an Acer Nitro AN515-57 (`1025:1539`) the
+> same write does not silence the microphone, it stalls the capture stream — `arecord`
+> returns `EIO` or hangs. See FINDINGS §3 and
+> [issue #2](https://github.com/sandbranch/x1-tablet-gen3-microphone/issues/2). Check your
+> SSID before trying this, and know how to write the value back. This is *not* "what Windows does" — see FINDINGS §5.
 It is documented because a microphone that emits hiss into every call is worse than one
 that emits nothing, and because it is the cleanest way to confirm the finding yourself.
 
-## This machine is not representative of the ALC295
+## How far this generalises
 
 The same codec with the *same* pin `0x12 = 0x90a60130` config appears in three upstream
 ASUS pin quirks whose fixups add nothing at all for the internal mic — the digital
-microphone works on other ALC295 machines with zero DMIC-specific code. This is
-machine-specific.
+microphone works on plenty of other ALC295 machines with zero DMIC-specific code. So this
+is not an ALC295-wide defect.
+
+It is also **not unique to this tablet**, which is a correction to what this page said
+before. The complete switch — cold boot dead, warm reboot from Windows alive, power cycle
+dead again, and no readable register delta between the two states — has been reproduced
+independently on an **Acer Nitro AN515-57** (board Scala_TLS, ALC295, PCI SSID
+`1025:1539`, CachyOS, kernel 7.2.9) by
+[Onassis-San](https://github.com/sandbranch/x1-tablet-gen3-microphone/issues/2). Different
+OEM, different board, different BIOS vendor, different distribution. Their machine
+confirms the eliminations independently: all 256 vendor COEFs of nid `0x20` identical
+between states, extended COEFs `0x0100–0x0fff` all zero, pin controls and sense for
+`0x12`/`0x19`/`0x21`/`0x24` identical, all power states D0, and a `modprobe -r`/`modprobe`
+cycle from the dead state leaving every COEF unchanged and still dead.
+
+One detail of theirs that this machine never tested: their warm path passes through BIOS
+setup, because BitLocker forces a Secure Boot toggle on each switch, and the armed state
+survives it.
+
+A second unrelated OEM showing the same shape is what makes a codec-internal latch the
+better explanation than anything platform- or firmware-specific. From one machine that was
+not a safe claim.
 
 ## A retracted result, kept in the write-up
 
