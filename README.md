@@ -283,11 +283,16 @@ mute the output pins before believing any microphone result — is in
 
 ## Prior art
 
-The same symptom is reported and unresolved for this model on Fedora (Discussion #159185)
-and on Linux Mint (t=450783, including a second machine in the same thread). Three
-independent X1 Tablet Gen 3 machines show it, which rules out a fault in any one unit.
-There is no quirk for `17aa:2244` anywhere in the kernel's Realtek codec tree — verified
-by grep against the source, not assumed.
+Four independent X1 Tablet Gen 3 machines show this, across four distributions and
+sixteen months, which rules out a fault in any one unit — see
+[FINDINGS §14](FINDINGS.md) for the list and links. Two further results came from other
+people rather than from here: someone with an affected machine confirmed that a wired
+3.5 mm headset microphone works on it, independently matching the finding that the analog
+path is healthy and only the internal DMIC is affected; and a Fedora user's log shows the
+codec falling through to Lenovo's vendor-wide quirk (`picked fixup for PCI SSID
+17aa:0000`), confirming from a second machine that no quirk exists for `17aa:2244`
+anywhere in the kernel's Realtek codec tree. That absence was verified here by grep
+against the source, not assumed — and it is not the bug.
 
 Full detail, including corrections and dead ends, in [FINDINGS.md](FINDINGS.md).
 

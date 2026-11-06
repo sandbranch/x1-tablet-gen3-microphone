@@ -1091,3 +1091,87 @@ That combination is genuinely strange, and it is the reason this is being publis
 than solved. Something that survives a full codec re-initialisation, a full DSP core reset,
 and a warm reboot, but dies within 30 seconds of power removal, and is invisible in every
 readable register on the platform.
+
+## 14. External corroboration
+
+Everything above was measured on one machine. This section records what other people,
+working independently and without access to this write-up, have since confirmed. It is
+kept separate from the measurements because none of it was produced here.
+
+### 14.1 A second, unrelated machine — Acer Nitro AN515-57
+
+Reported by [Onassis-San](https://github.com/sandbranch/x1-tablet-gen3-microphone/issues/2)
+on 2026-10-19. Board Scala_TLS, BIOS V1.22, CachyOS, kernel 7.2.9, ALC295, PCI SSID
+`1025:1539`. Different OEM, board, BIOS vendor, distribution and kernel.
+
+The complete switch reproduces: cold boot into Linux captures broadband noise with the
+speech window statistically indistinguishable from the silence window; Windows 11 then a
+warm reboot gives real audio with clean formant structure; a power cycle kills it again.
+Their eliminations, arrived at separately, match ours — all 256 vendor COEFs of nid `0x20`
+identical between states, extended COEFs `0x0100–0x0fff` all zero, pin controls and sense
+for `0x12`/`0x19`/`0x21`/`0x24` identical, all power states D0, and a `modprobe -r` /
+`modprobe` cycle from the dead state leaving every COEF unchanged and still dead.
+
+Two things their machine adds that this one could not:
+
+- **`COEF 0x08` does not play the same role everywhere.** See §3; on `1025:1539` it reads
+  `0x6a0c` in both states and writing `0x6a00` stalls the capture stream rather than
+  silencing it.
+- **The armed state survives a trip through firmware setup.** Their warm path goes through
+  BIOS setup, because BitLocker forces a Secure Boot toggle on each switch.
+
+This is the single most important external result: a second unrelated OEM showing the same
+shape is what makes a codec-internal latch a better explanation than anything platform- or
+firmware-specific. From one machine that was not a safe claim.
+
+### 14.2 Further affected X1 Tablet Gen 3 units
+
+- `FlippingBinary` (Jon Musselwhite),
+  [issue #1](https://github.com/sandbranch/x1-tablet-gen3-microphone/issues/1),
+  2026-09-11 — same tablet, noise only. Notably **has never run Windows on it**, which
+  rules out this machine having been put into a bad state by something done here.
+- `c6nyon`, [Linux Mint t=450783](https://forums.linuxmint.com/viewtopic.php?t=450783),
+  2025-08-06 — same tablet, "when I use the built-in microphone I just get static".
+- `carboncanyon` (Greg Tada),
+  [Fedora Discussion #159185](https://discussion.fedoraproject.org/t/microphone-not-working-thinkpad-x1-tablet-gen-3/159185),
+  2025-07-18 — Fedora 42 Plasma, `arecord` returns white noise.
+
+With this machine that is **four** X1 Tablet Gen 3 units, across four distributions, over
+sixteen months. Note the Mint thread is closed — that forum auto-closes topics at six
+months — and is misleadingly marked `<SOLVED>`; the author marked it so after concluding
+it was a known unfixable issue, not because anything was fixed.
+
+### 14.3 The analog path is healthy — confirmed by someone else
+
+In the same Mint thread, `jlhiowa` tested a wired 3.5 mm headset on an affected machine
+and reported that both its microphone and its earbuds worked. That is an independent
+arrival at the split this write-up argues for: the codec, the ADC, the capture chain and
+the analog path are all fine, and the fault is specific to the internal digital
+microphone. It is also the cheapest possible first diagnostic for a new reporter, and is
+worth suggesting before anything else.
+
+### 14.4 The kernel itself confirms no quirk exists for this SSID
+
+§7 and the README state that there is no `SND_PCI_QUIRK` entry for `17aa:2244` anywhere in
+the Realtek codec tree, verified by grep. Greg Tada's log confirms it from the other
+direction, on a different machine and distribution:
+
+    snd_hda_codec_realtek hdaudioC0D0: ALC295: picked fixup for PCI SSID 17aa:0000
+
+A device ID of `0000` is how the kernel prints a **vendor-wide** quirk entry:
+`SND_PCI_QUIRK_VENDOR(vend, ...)` expands to `.subdevice = 0, .subdevice_mask = 0`
+(`include/sound/core.h`). So the codec fell through to Lenovo's catch-all rather than
+matching anything for this model. On current mainline that entry is
+
+    SND_PCI_QUIRK_VENDOR(0x17aa, "Lenovo XPAD", ALC269_FIXUP_LENOVO_XPAD_ACPI)
+
+in `sound/hda/codecs/realtek/alc269.c`, and the fixup it selects is
+`alc_fixup_ideapad_acpi` chained to `ALC269_FIXUP_THINKPAD_ACPI` — ACPI platform
+integration only, nothing touching the DMIC. There is no `0x17aa, 0x2244` entry in the
+file.
+
+So the absence of a model quirk is confirmed, and it is also **not the bug**: the
+catch-all matching is expected behaviour, and a model-specific quirk would have nothing to
+set, because §3 and §13 establish there is no register difference to encode.
+
+Their pin layout is identical to this machine's — `Internal Mic=0x12`, `Mic=0x19`.
